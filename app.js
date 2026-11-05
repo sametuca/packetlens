@@ -457,6 +457,7 @@ async function initServer() {
       if (window.PLApp && window.PLApp.checkUpdate) window.PLApp.checkUpdate(j.commit);
     } catch (e2) { /* yan etkiler sunucu bağlantısını bozmaz */ }
     renderLivebar();
+    syncFileOnlyChrome();
   } catch (e) {
     if (seq !== initServerSeq) return;
     srvInit = 'fail';
@@ -467,13 +468,47 @@ async function initServer() {
   }
 }
 function sysPlatformHint(j) {
-  if (j && j.platform && !j.platform.startsWith('linux')) return 'macOS/Windows: canlı paket yakalama yok; pcap yükleyin veya Linux’ta sudo ile çalıştırın.';
+  if (j && j.platform === 'win32' && j.capture && j.capture_backend === 'dumpcap') {
+    return j.root ? 'Windows: canlı yakalama hazır (Npcap; monitör modu gerekmez).' : 'Windows: canlı yakalama için start.bat dosyasına sağ tık → Yönetici olarak çalıştır.';
+  }
+  if (j && j.platform === 'win32') return 'Windows: .pcap sürükleyin veya Wireshark+Npcap kurun.';
+  if (j && j.platform === 'darwin') return 'macOS: .pcap / .pcapng dosyası sürükleyin veya Dosya seç.';
+  if (j && j.platform && !j.platform.startsWith('linux')) return 'Bu ortamda yalnızca .pcap dosyası analizi.';
   return 'Canlı yakalama kapalı (--no-capture).';
+}
+function isMacFileOnly() {
+  const s = S.srv;
+  return !!(s && s.platform === 'darwin' && !s.capture);
+}
+function syncFileOnlyChrome() {
+  const mac = isMacFileOnly(), b = $('#b-live');
+  const heroBtn = document.querySelector('#empty .row button[data-act="analyze"], #empty .row button[data-act="open"]');
+  if (mac) {
+    if (b && !S.live.running) {
+      b.textContent = '📂 Dosya aç';
+      b.className = 'btn primary big';
+      b.dataset.act = 'open';
+      b.title = 'macOS: kayıtlı .pcap / .pcapng analizi';
+    }
+    if (heroBtn) {
+      heroBtn.textContent = '📂 Dosya aç';
+      heroBtn.dataset.act = 'open';
+    }
+  } else if (b && !S.live.running) {
+    b.textContent = '▶ Analiz et';
+    b.className = 'btn primary big';
+    b.dataset.act = 'analyze';
+    b.removeAttribute('title');
+    if (heroBtn) {
+      heroBtn.textContent = '▶ Canlı analiz et';
+      heroBtn.dataset.act = 'analyze';
+    }
+  }
 }
 function renderLivebar() {
   const bar = $('#livebar'), s = S.srv, b = $('#b-live');
   if (S.live.running) { b.textContent = '■ Durdur'; b.className = 'btn danger big'; b.dataset.act = 'livestop'; }
-  else { b.textContent = '▶ Analiz et'; b.className = 'btn primary big'; b.dataset.act = 'analyze'; }
+  else syncFileOnlyChrome();
   if (!S.live.running && !S.liveOpen) { bar.hidden = true; return; }
   bar.hidden = false;
   const cmd = '<span class="mono">sudo python3 packetlens.py</span>';
@@ -490,19 +525,24 @@ function renderLivebar() {
     else if (srvInit === 'fail') msg = 'Tarayıcı API’ye ulaşamadı. Terminalde <span class="mono">curl</span> JSON dönüyorsa <b>Ctrl+Shift+R</b> ile yenileyin veya <b>Yeniden dene</b>.' + liveConnectHint();
     else msg = `Sunucu bilinmiyor. Kali terminalinde: ${cmd}`;
     bar.innerHTML = `<b>Canlı analiz</b><span class="muted">${msg}</span><button class="btn sm" data-act="retry-srv">Yeniden dene</button><button class="btn sm ghost" data-act="analyze">Kapat ✕</button>`;
+  } else if (!s.capture && s.platform === 'darwin') {
+    bar.innerHTML = `<b>Dosya analizi</b><span class="muted">macOS’ta canlı dinleme yok; Wireshark veya tcpdump ile kaydettiğiniz dosyayı açın.</span>
+      <button class="btn sm primary" data-act="open">Dosya seç</button>
+      <button class="btn sm" data-act="sample">Örnek</button>
+      <button class="btn sm ghost" data-act="analyze">Kapat ✕</button>`;
   } else if (!s.capture) {
-    const plat = (s.platform && !s.platform.startsWith('linux')) ? ' Bu ortamda (macOS/Windows) yalnızca .pcap dosyası analizi desteklenir; canlı yakalama için Linux gerekir.' : '';
-    bar.innerHTML = `<b>Canlı analiz</b><span class="muted">Canlı yakalama kapalı (--no-capture).${plat} Dosya sürükleyip bırakabilirsiniz.</span><button class="btn sm ghost" data-act="analyze">Kapat ✕</button>`;
+    const plat = (s.platform === 'win32') ? ' Windows’ta Npcap kurulunca canlı yakalama açılır.' : '';
+    bar.innerHTML = `<b>Canlı analiz</b><span class="muted">Canlı yakalama kapalı.${plat} Dosya sürükleyip bırakabilirsiniz.</span><button class="btn sm" data-act="open">Dosya seç</button><button class="btn sm ghost" data-act="analyze">Kapat ✕</button>`;
   } else {
     const ifaces = s.interfaces || [], st = S.set, defIf = (ifaces.find(i => i.default) || {}).name, ifc = S.live.iface && S.live.iface !== 'any' ? S.live.iface : (st.iface || s.default_iface || defIf || 'any');
     const opts = [st.duration ? T(st.duration + ' sn sonra otomatik durur') : T('süre sınırı yok'), T('en fazla ' + st.max.toLocaleString(L()) + ' paket'), st.promisc ? T('promiscuous açık') : T('promiscuous kapalı')].join(' · ');
     const kindIc = { ethernet: '🖧', wifi: '📶', loopback: '↺', virtual: '⧉' }, kindTx = { ethernet: 'Ethernet', wifi: 'Wi-Fi', loopback: 'Loopback', virtual: 'Sanal' };
     const cards = [{ name: 'any', kind: 'any', state: 'up' }].concat(ifaces).map(i => i.kind === 'any'
       ? `<button class="ifc ${ifc === 'any' ? 'on' : ''}" data-act="pickif" data-v="any"><span class="ifc-ic">🌐</span><b>${T('Tüm arayüzler')}</b><span class="muted small">any</span></button>`
-      : `<button class="ifc ${ifc === i.name ? 'on' : ''} ${i.state !== 'up' ? 'down' : ''}" data-act="pickif" data-v="${esc(i.name)}"><span class="ifc-ic">${kindIc[i.kind] || '🖧'}</span><b>${esc(i.name)}</b>${i.default ? `<span class="iftag">${T('internet çıkışı')}</span>` : ''}<span class="muted small">${T(kindTx[i.kind] || 'Ethernet')} · ${i.state === 'up' ? T('bağlı') : T('kapalı')}${i.speed > 0 ? ' · ' + i.speed + ' Mb/s' : ''}</span><span class="mono small">${esc(i.ipv4 ? i.ipv4 + (i.mask ? '/' + maskBits(i.mask) : '') : '—')}</span><span class="mono small muted">${esc(i.mac || '')}</span><span class="muted small">↓ ${fmtB(i.rx)} · ↑ ${fmtB(i.tx)}</span></button>`).join('');
+      : `<button class="ifc ${ifc === i.name ? 'on' : ''} ${i.state !== 'up' ? 'down' : ''}" data-act="pickif" data-v="${esc(i.name)}"><span class="ifc-ic">${kindIc[i.kind] || '🖧'}</span><b>${esc(i.label || i.name)}</b>${i.default ? `<span class="iftag">${T('internet çıkışı')}</span>` : ''}<span class="muted small">${T(kindTx[i.kind] || 'Ethernet')} · ${i.state === 'up' ? T('bağlı') : T('kapalı')}${i.speed > 0 ? ' · ' + i.speed + ' Mb/s' : ''}</span><span class="mono small">${esc(i.ipv4 ? i.ipv4 + (i.mask ? '/' + maskBits(i.mask) : '') : '—')}</span><span class="mono small muted">${esc(i.mac || '')}</span><span class="muted small">↓ ${fmtB(+i.rx || 0)} · ↑ ${fmtB(+i.tx || 0)}</span></button>`).join('');
     const gw = S.net && S.net.gateway && S.net.gateway.ip ? `<span class="muted small">${T('Ağ geçidi')}: <span class="mono">${esc(S.net.gateway.ip)}</span>${S.net.dns && S.net.dns.length ? ' · DNS: <span class="mono">' + esc(S.net.dns.slice(0, 2).join(', ')) + '</span>' : ''}</span>` : '';
     bar.innerHTML = `<div class="ifgrid" role="listbox" aria-label="${T('Ağ adaptörü')}">${cards}</div><input type="hidden" id="iface" value="${esc(ifc)}">${gw}<b class="sr"></b><input id="capf" class="capf" value="${esc(S.live.filter != null && S.live.since ? S.live.filter : (S.live.filter || st.capfilter || ''))}" placeholder="Yakalama filtresi (isteğe bağlı): host 192.168.1.5 and port 443" spellcheck="false" autocomplete="off">
-      <button class="btn primary" data-act="livestart" ${s.root ? '' : 'disabled title="sudo ile başlatın"'}>▶ Analizi başlat</button>
+      <button class="btn primary" data-act="livestart" ${s.root || (s.platform === 'win32' && s.capture) ? '' : 'disabled title="Linux: sudo; Windows: Yönetici"'}>▶ Analizi başlat</button>
       ${S.pk.length && S.live.since ? `<a class="btn sm" href="/api/save" download>.pcap olarak kaydet</a>` : ''}
       <span class="muted small">${opts} · <a href="#" data-act="settings">değiştir</a></span>
       ${s.root ? '' : `<span class="muted small">Root değilsiniz: canlı analiz için ${cmd}</span>`}
@@ -569,7 +609,19 @@ document.addEventListener('click', e => {
     case 'open': $('#file').click(); break;
     case 'pickif': { const c = $('#capf'); if (c) S.live.filter = c.value; S.live.iface = v; S.set.iface = v; renderLivebar(); return; }
     case 'retry-srv': initServer().then(() => renderLivebar()); break;
-    case 'analyze': S.liveOpen = !S.liveOpen; if (S.liveOpen && !S.srv) initServer().then(() => renderLivebar()); else if (S.liveOpen) loadNet().then(renderLivebar); renderLivebar(); if (S.liveOpen) { const c = $('#capf'); if (c) c.focus(); } break;
+    case 'analyze':
+      if (isMacFileOnly()) {
+        S.liveOpen = !S.liveOpen;
+        if (!S.liveOpen) { renderLivebar(); break; }
+        renderLivebar();
+        break;
+      }
+      S.liveOpen = !S.liveOpen;
+      if (S.liveOpen && !S.srv) initServer().then(() => renderLivebar());
+      else if (S.liveOpen) loadNet().then(renderLivebar);
+      renderLivebar();
+      if (S.liveOpen) { const c = $('#capf'); if (c) c.focus(); }
+      break;
     case 'settings': S.tab = S.tab === 'settings' ? (S.A ? 'summary' : 'summary') : 'settings'; if (S.tab === 'settings') { $('#empty').hidden = true; $('#app').hidden = false; } else if (!S.A) { $('#empty').hidden = false; $('#app').hidden = true; } S.liveOpen = false; renderLivebar(); render(); break;
     case 'ptentes': S.mode = 'adv'; try { localStorage.setItem('pl-mode', 'adv'); } catch (x) { /* yok say */ } S.tab = 'ptentes'; $('#empty').hidden = true; $('#app').hidden = false; S.liveOpen = false; renderLivebar(); render(); break;
     case 'lang': S.set.lang = v; saveSettings(); applySettings(false); render(); renderLivebar(); if (window.PLI) window.PLI.apply(document.body); break;
@@ -618,7 +670,7 @@ document.addEventListener('drop', e => { const f = e.dataTransfer && e.dataTrans
 applySettings(false);
 renderChrome();
 renderLivebar();
-initServer();
+initServer().then(() => syncFileOnlyChrome());
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && S.liveOpen && !S.srv && srvInit === 'fail') initServer().then(() => renderLivebar());
 });

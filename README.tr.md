@@ -7,7 +7,7 @@
 [English](README.md) · **Türkçe**
 
 Wireshark tarzı ama çok daha kolay: paketleri uygulamalara, bağlantılara, cihazlara ve **sorunlara** ayırır, düz Türkçe ile anlatır.
-Kali Linux için hazırlandı; **bağımlılık yok** (sadece Python 3). Wireshark, tshark veya libpcap gerekmez.
+Linux’ta **bağımlılık yok** (Python 3 + AF_PACKET). **Windows**’ta arayüz + `.pcap` analizi Python ile; **canlı yakalama** için [Wireshark + Npcap](https://www.wireshark.org/download.html) (monitör modu gerekmez).
 
 ![Özet](docs/tr/02-overview.png)
 
@@ -22,12 +22,14 @@ python3 packetlens.py --no-capture  # root olmadan, sadece .pcap analizi (macOS'
 
 Tarayıcı açılmazsa terminalde yazan **`http://127.0.0.1:8765`** adresini açın.
 
-**macOS:** komut yazmak yerine proje klasöründeki **`start.command`** dosyasına çift tıklayın — sunucuyu başlatır ve tarayıcıyı doğru adreste otomatik açar. `index.html` dosyasına doğrudan çift tıklamayın: o zaman sayfa sunucusuz (`file://`) açılır ve canlı analiz çalışmaz.
+**Windows:** **`start.bat`** — Npcap yoksa **otomatik kurar** (önce `winget`, olmazsa resmi Npcap indirici; gerekirse Wireshark/dumpcap). UAC/yönetici izni istenebilir. `--skip-npcap-install` ile atlanır. Wi‑Fi’de monitör modu **gerekmez**.
+
+**macOS:** **`start.command`** — yalnızca `.pcap` analizi (canlı yakalama yok). `index.html`’e doğrudan tıklamayın (`file://`).
 
 **Linux (Kali vb.):** komut yazmak yerine dosya yöneticinizde **`start.sh`** dosyasına çift tıklayıp "Çalıştır" / "Terminalde çalıştır" seçin — canlı yakalama için sudo parolanızı sorar, tarayıcıyı otomatik açar; root yoksa dosya analizi moduna düşer. Uygulamalar menüsüne (ve masaüstüne) gerçek bir **PacketLens** simgesi eklemek için bir kez `./install-desktop-launcher.sh` çalıştırın.
 Seçenekler: `-i eth0` (varsayılan arayüz), `--port 9000`, `--no-browser`, `--scan-interval DK` (periyodik ARP taraması, root).
 Sunucu olmadan `index.html` dosyasını doğrudan açıp `.pcap` / `.pcapng` yükleyebilirsiniz (canlı analiz ve ptentes çalışmaz).
-macOS/Windows’ta canlı paket yakalama yoktur; `python3 packetlens.py --no-capture` ile dosya analizi yapılır.
+macOS’ta canlı yakalama yoktur. Windows’ta Npcap yoksa `python packetlens.py --no-capture` ile yalnızca dosya analizi.
 Uygulamayı denemek için **☰ Menü → Örnek yükle**.
 
 ## Kendi ağınızı analiz edin

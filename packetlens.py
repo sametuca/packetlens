@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""PacketLens - Kali/Linux için canlı paket yakalama + yerel GUI sunucusu.
+"""PacketLens - canlı paket yakalama + yerel GUI (Linux, Windows; macOS dosya analizi).
 
 Kullanım:
-    sudo python3 packetlens.py                 # arayüzü açar, canlı yakalama için root gerekir
-    python3 packetlens.py --no-capture         # root olmadan sadece .pcap dosyası analizi
-    sudo python3 packetlens.py -i eth0 --port 8765
+    sudo python3 packetlens.py          # Linux: AF_PACKET
+    python3 packetlens.py               # Windows: Wireshark/Npcap (dumpcap) veya .pcap analizi
+    python3 packetlens.py --no-capture  # yalnızca .pcap dosyası
 
-Bağımlılık yok: yalnızca Python 3 standart kütüphanesi (AF_PACKET). Wireshark/libpcap gerekmez.
-Sunucu sadece 127.0.0.1 üzerinde dinler (localhost).
+Linux: standart kütüphane (AF_PACKET). Windows canlı yakalama: Wireshark + Npcap (monitör modu gerekmez).
+Sunucu yalnızca 127.0.0.1 üzerinde dinler.
 """
-import argparse, base64, json, os, signal, socket, struct, subprocess, sys, threading, time, webbrowser
+import argparse, base64, json, os, socket, struct, subprocess, sys, threading, time, webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 import urllib.error
@@ -18,6 +18,7 @@ import urllib.request
 from capfilter import compile_filter, FilterError
 from ptentes import PT as PTENTES
 from deviceintel import REGISTRY as DEVICE_REG, scheduled_scan_loop
+from pl_platform import is_privileged, list_interfaces, network_info, default_gateway_linux, stop_running_packetlens
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -65,6 +66,9 @@ class Capture:
         self.flt_text = ''
 
     def start(self, iface, flt_text='', snap=SNAP, max_packets=MAX_PACKETS, duration=0, promisc=True):
+        if sys.platform == 'win32':
+            from pl_capture_win import start_win_capture
+            return start_win_capture(self, iface, flt_text, snap, max_packets, duration, promisc)
         self.stop()
         self.snap, self.max_packets, self.duration = snap, max_packets, duration
         self.flt = compile_filter(flt_text)   # FilterError çağırana gider
@@ -126,6 +130,10 @@ class Capture:
             self.running = False
 
     def stop(self):
+        if sys.platform == 'win32' and getattr(self, '_win_proc', None):
+            from pl_capture_win import stop_win_capture
+            stop_win_capture(self)
+            return
         self.stop_ev.set()
         if self.thread:
             self.thread.join(timeout=1.5)
@@ -154,80 +162,31 @@ ARGS = None
 SELF_PORT = 0
 
 
-def _read(path, default=''):
-    try:
-        with open(path) as f:
-            return f.read().strip()
-    except OSError:
-        return default
-
-
-def _ioctl_ip(name, req):
-    try:
-        import fcntl
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            r = fcntl.ioctl(s.fileno(), req, struct.pack('256s', name[:15].encode()))
-        finally:
-            s.close()
-        return socket.inet_ntoa(r[20:24])
-    except Exception:
-        return ''
-
-
-def _hex_ip(h):
-    try:
-        return socket.inet_ntoa(struct.pack('<I', int(h, 16)))
-    except Exception:
-        return ''
+def default_gateway():
+    return default_gateway_linux()
 
 
 def interfaces():
-    """Ağ adaptörleri: ad, durum, tür, MAC, IPv4, hız, MTU, sayaçlar, varsayılan çıkış mı."""
-    res = []
-    gw_if = default_gateway()[0]
-    try:
-        names = sorted(os.listdir('/sys/class/net'))
-    except OSError:
-        names = []
-    for n in names:
-        base = '/sys/class/net/%s/' % n
-        kind = 'loopback' if n == 'lo' else 'wifi' if os.path.isdir(base + 'wireless') or os.path.isdir(base + 'phy80211') \
-            else 'virtual' if os.path.exists('/sys/devices/virtual/net/%s' % n) else 'ethernet'
-        try:
-            speed = int(_read(base + 'speed', '-1'))
-        except ValueError:
-            speed = -1
-        res.append({'name': n, 'state': _read(base + 'operstate', '?'), 'kind': kind, 'mac': _read(base + 'address'),
-                    'ipv4': _ioctl_ip(n, 0x8915), 'mask': _ioctl_ip(n, 0x891b), 'speed': speed if speed > 0 else None,
-                    'mtu': _read(base + 'mtu'), 'rx': _read(base + 'statistics/rx_bytes'), 'tx': _read(base + 'statistics/tx_bytes'),
-                    'default': n == gw_if})
-    return res
-
-
-def default_gateway():
-    for line in _read('/proc/net/route').split('\n')[1:]:
-        f = line.split()
-        if len(f) <= 3 or f[1] != '00000000':
-            continue
-        try:
-            if int(f[3], 16) & 2:
-                return f[0], _hex_ip(f[2])
-        except ValueError:
-            continue
-    return '', ''
+    dumpcap_ifaces = None
+    if sys.platform == 'win32':
+        from pl_capture_win import find_dumpcap, list_dumpcap_interfaces
+        if find_dumpcap():
+            dumpcap_ifaces = list_dumpcap_interfaces()
+    return list_interfaces(dumpcap_ifaces)
 
 
 def net_info():
-    """Bağlı olunan ağ: varsayılan ağ geçidi, DNS sunucuları ve ARP tablosundaki komşular."""
-    gi, gip = default_gateway()
-    dns = [l.split()[1] for l in _read('/etc/resolv.conf').split('\n') if l.startswith('nameserver') and len(l.split()) > 1]
-    arp = []
-    for line in _read('/proc/net/arp').split('\n')[1:]:
-        f = line.split()
-        if len(f) >= 6 and f[2] != '0x0' and f[3] != '00:00:00:00:00:00':
-            arp.append({'ip': f[0], 'mac': f[3], 'iface': f[5]})
-    return {'gateway': {'iface': gi, 'ip': gip}, 'dns': dns, 'arp': arp}
+    return network_info()
+
+
+def capture_backend_name():
+    if ARGS is None or ARGS.no_capture:
+        return None
+    if sys.platform == 'win32':
+        return 'dumpcap'
+    if sys.platform.startswith('linux'):
+        return 'af_packet'
+    return None
 
 
 class H(BaseHTTPRequestHandler):
@@ -296,8 +255,9 @@ class H(BaseHTTPRequestHandler):
             return self._send(404, {'error': 'yok'})
         if u.path == '/api/info':
             try:
-                payload = {'interfaces': interfaces(), 'root': os.geteuid() == 0, 'capture': not ARGS.no_capture,
-                           'default_iface': ARGS.iface, 'commit': LOCAL_COMMIT, 'repo': 'sametuca/packetlens', 'platform': sys.platform}
+                payload = {'interfaces': interfaces(), 'root': is_privileged(), 'capture': not ARGS.no_capture,
+                           'capture_backend': capture_backend_name(), 'default_iface': ARGS.iface,
+                           'commit': LOCAL_COMMIT, 'repo': 'sametuca/packetlens', 'platform': sys.platform}
                 return self._send(200, payload)
             except Exception as e:
                 sys.stderr.write('PacketLens /api/info hatası: %s\n' % e)
@@ -416,29 +376,6 @@ def _probe_api(port):
         return 'closed', None
 
 
-def stop_running_packetlens():
-    """Arka planda kalan packetlens.py süreçlerini sonlandır (kendi PID hariç)."""
-    me = os.getpid()
-    try:
-        r = subprocess.run(['pgrep', '-f', 'packetlens.py'], capture_output=True, text=True, timeout=5)
-        if r.returncode != 0:
-            return
-        for line in r.stdout.splitlines():
-            line = line.strip()
-            if not line.isdigit():
-                continue
-            pid = int(line)
-            if pid == me:
-                continue
-            try:
-                os.kill(pid, signal.SIGTERM)
-            except OSError:
-                pass
-        time.sleep(0.8)
-    except Exception:
-        pass
-
-
 def _running_instance_url(port):
     """Aynı portta güncel sunucumuz zaten çalışıyor mu? Çalışıyorsa adresini döner."""
     st, _ = _probe_api(port)
@@ -454,7 +391,7 @@ def open_browser(url):
     """root olarak çalışıyorsak tarayıcıyı normal kullanıcı olarak aç (Firefox root'u sevmez)."""
     user = os.environ.get('SUDO_USER')
     try:
-        if os.geteuid() == 0 and user and user != 'root':
+        if sys.platform.startswith('linux') and is_privileged() and user and user != 'root':
             env = {k: v for k, v in os.environ.items() if k in ('DISPLAY', 'WAYLAND_DISPLAY', 'XDG_RUNTIME_DIR', 'XAUTHORITY', 'PATH')}
             env.setdefault('XAUTHORITY', os.path.expanduser('~%s/.Xauthority' % user))
             subprocess.Popen(['sudo', '-u', user, '--preserve-env=DISPLAY,WAYLAND_DISPLAY,XDG_RUNTIME_DIR,XAUTHORITY', 'xdg-open', url],
@@ -478,15 +415,36 @@ def main():
                       help='zaten çalışıyorsa yeni süreç başlatma, yalnızca tarayıcıyı aç ve çık')
     ap.add_argument('--keep-running', action='store_true',
                       help='--attach ile aynı: arka plandaki sürece dokunma')
+    ap.add_argument('--skip-npcap-install', action='store_true',
+                      help='Windows: Npcap/Wireshark otomatik kurulumunu atla')
+    ap.add_argument('--elevated-child', action='store_true', help=argparse.SUPPRESS)
     ap.add_argument('--scan-interval', type=int, default=0, metavar='DK',
                     help='dakikada bir ARP cihaz taraması (0=kapalı, root gerekir)')
     ARGS = ap.parse_args()
     scan_stop = threading.Event()
-    if not sys.platform.startswith('linux') and not ARGS.no_capture:
-        print('Uyarı: canlı yakalama yalnızca Linux’ta çalışır; --no-capture ile devam ediliyor.')
+    if sys.platform == 'win32' and not ARGS.no_capture:
+        from pl_capture_win import find_dumpcap
+        from pl_install_win import ensure_capture_ready
+        if find_dumpcap():
+            print('Windows: dumpcap ile canlı yakalama — monitör modu gerekmez.')
+        elif not ARGS.skip_npcap_install:
+            if ensure_capture_ready(elevated_child=ARGS.elevated_child):
+                print('Windows: canlı yakalama hazır.')
+            elif not find_dumpcap():
+                print('Canlı yakalama açılamadı; yalnızca .pcap analizi (--no-capture).')
+                ARGS.no_capture = True
+        else:
+            print('Npcap/Wireshark yok (--skip-npcap-install). .pcap analizi modu.')
+            ARGS.no_capture = True
+    elif sys.platform == 'darwin' and not ARGS.no_capture:
+        print('macOS: canlı yakalama yok; .pcap dosyası analizi.')
         ARGS.no_capture = True
-    if not ARGS.no_capture and os.geteuid() != 0:
+    elif not sys.platform.startswith('linux') and sys.platform != 'win32' and not ARGS.no_capture:
+        ARGS.no_capture = True
+    if not ARGS.no_capture and sys.platform.startswith('linux') and not is_privileged():
         print('Not: root değilsiniz, canlı yakalama başlatılamaz (dosya analizi çalışır). Canlı yakalama için: sudo python3 packetlens.py')
+    if not ARGS.no_capture and sys.platform == 'win32' and not is_privileged():
+        print('Not: Canlı yakalama için Yönetici olarak çalıştırmanız önerilir (Npcap).')
 
     if ARGS.restart:
         stop_running_packetlens()
@@ -526,7 +484,7 @@ def main():
     print('Durdurmak için Ctrl+C')
     if not ARGS.no_browser:
         threading.Timer(0.5, open_browser, (url,)).start()
-    if ARGS.scan_interval > 0 and os.geteuid() == 0 and sys.platform.startswith('linux'):
+    if ARGS.scan_interval > 0 and is_privileged() and sys.platform.startswith('linux'):
         iface = ARGS.iface if ARGS.iface != 'any' else (default_gateway()[0] or 'eth0')
         threading.Thread(target=scheduled_scan_loop, args=(iface, max(60, ARGS.scan_interval * 60), scan_stop), daemon=True).start()
         print('Zamanlanmış ARP taraması: her %d dk (%s)' % (ARGS.scan_interval, iface))
