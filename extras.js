@@ -193,11 +193,11 @@ function install(PL) {
     }
     for (const [parent, e] of par) {
       const n = e.nos.length, ae = e.ent / n, al = e.len / n;
-      if ((e.subs.size >= 15 && ae >= 3.2 && al >= 12) || e.max >= 52 || e.subs.size >= 40) addProblem({ sev: 'high', type: 'dnstunnel', title: 'Olası DNS tünelleme / veri sızdırma', flow: null, ts: pk[e.nos[0] - 1].ts, pkts: e.nos.slice(0, 200),
+      if ((e.subs.size >= PL.cfg.tunnelSubs && ae >= 3.2 && al >= 12) || e.max >= 52 || e.subs.size >= 40) addProblem({ sev: 'high', type: 'dnstunnel', title: 'Olası DNS tünelleme / veri sızdırma', flow: null, ts: pk[e.nos[0] - 1].ts, pkts: e.nos.slice(0, 200),
         plain: `${nm(e.client)}, "${parent}" alan adı için ${e.subs.size} farklı, uzun ve rastgele görünümlü alt alan adı sorguladı (ort. ${al.toFixed(0)} karakter). Bu, DNS üzerinden gizlice veri taşıma (tünelleme) davranışına benzer.`,
         advice: 'Bu alan adının meşru olup olmadığını doğrulayın. Şüpheliyse DNS çıkışını kısıtlayın, alan adını engelleyin ve cihazı zararlı yazılım için inceleyin.' });
     }
-    for (const [client, e] of nx) if (e.names.size >= 20) addProblem({ sev: 'med', type: 'dga', title: 'Çok sayıda geçersiz alan adı (DGA olasılığı)', flow: null, ts: pk[e.nos[0] - 1].ts, pkts: e.nos.slice(0, 200),
+    for (const [client, e] of nx) if (e.names.size >= PL.cfg.dgaNames) addProblem({ sev: 'med', type: 'dga', title: 'Çok sayıda geçersiz alan adı (DGA olasılığı)', flow: null, ts: pk[e.nos[0] - 1].ts, pkts: e.nos.slice(0, 200),
       plain: `${nm(client)} kısa sürede ${e.names.size} farklı, var olmayan alan adı sorguladı. Bazı zararlı yazılımlar komuta sunucusunu bulmak için rastgele alan adları dener.`, advice: 'Sorgulayan uygulamayı/süreci belirleyin ve cihazı tarayın.' });
 
     // 6) Düzenli aralıklı bağlantılar (beacon)
@@ -215,7 +215,7 @@ function install(PL) {
     // 7) Ping taraması, SYN seli
     const sweep = new Map();
     for (const p of pk) if (p.icmp && p.icmp.type === 8 && !p.icmp.six) { let e = sweep.get(p.src); if (!e) sweep.set(p.src, e = { d: new Set(), nos: [] }); e.d.add(p.dst); e.nos.push(p.no); }
-    for (const [src, e] of sweep) if (e.d.size >= 15) addProblem({ sev: 'med', type: 'sweep', title: 'Olası ping taraması', flow: null, ts: pk[e.nos[0] - 1].ts, pkts: e.nos.slice(0, 100),
+    for (const [src, e] of sweep) if (e.d.size >= PL.cfg.sweepHosts) addProblem({ sev: 'med', type: 'sweep', title: 'Olası ping taraması', flow: null, ts: pk[e.nos[0] - 1].ts, pkts: e.nos.slice(0, 100),
       plain: `${nm(src)} adresi ${e.d.size} farklı cihaza ping gönderdi. Ağdaki canlı cihazları keşfetmek için kullanılan bir yöntemdir.`, advice: 'Tarama yetkiniz dahilinde değilse kaynağı inceleyin.' });
     const tgt = new Map();
     for (const f of A.flows) if (f.proto === 'TCP' && f.syn) { const k = f.server + ':' + f.bPort; let e = tgt.get(k); if (!e) tgt.set(k, e = { n: 0, ok: 0, f: f }); e.n++; if (f.synack) e.ok++; }

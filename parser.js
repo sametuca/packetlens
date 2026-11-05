@@ -318,6 +318,7 @@ function dICMP(p, v, o, end, six) {
 }
 
 /* ---------------- Analiz ---------------- */
+const CFG = { dnsSlow: 0.25, rttSlow: 0.15, scanTargets: 15, retransMed: 3, tunnelSubs: 15, dgaNames: 20, sweepHosts: 15, off: new Set() };
 const isPrivate = ip => /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|127\.|169\.254\.|fe80:|fc|fd)/i.test(ip) || /^(22[4-9]|23\d)\./.test(ip);
 
 function analyze(packets) {
@@ -332,7 +333,7 @@ function analyze(packets) {
   }
   for (const p of packets) { if (p.sni) A.names.set(p.dst, p.sni); else if (p.http && p.http.host && /^GET|POST|HEAD|PUT/.test(p.http.first)) A.names.set(p.dst, p.http.host); }
 
-  const addProblem = pr => { pr.id = A.problems.length + 1; A.problems.push(pr); return pr; };
+  const addProblem = pr => { if (CFG.off.has(pr.type)) return pr; pr.id = A.problems.length + 1; A.problems.push(pr); return pr; };
 
   for (const p of packets) {
     // host
@@ -383,7 +384,7 @@ function analyze(packets) {
       if (!p.dns.qr) A.pending.set(p.dns.id + '|' + qn + '|' + p.src, p);
       else {
         const k = p.dns.id + '|' + qn + '|' + p.dst, q = A.pending.get(k);
-        if (q) { p.dnsLatency = p.ts - q.ts; p.dnsQNo = q.no; q.dnsRNo = p.no; q.dnsAnswered = true; A.pending.delete(k); if (p.dnsLatency > 0.25) p.anoms.push('dns-slow'); }
+        if (q) { p.dnsLatency = p.ts - q.ts; p.dnsQNo = q.no; q.dnsRNo = p.no; q.dnsAnswered = true; A.pending.delete(k); if (p.dnsLatency > CFG.dnsSlow) p.anoms.push('dns-slow'); }
         if (p.dns.rcode === 3) p.anoms.push('dns-nx'); else if (p.dns.rcode) p.anoms.push('dns-error');
       }
     }
@@ -399,7 +400,7 @@ function analyze(packets) {
   const portScan = new Map();
   for (const p of packets) if (p.proto === 'TCP' && (p.flags & 18) === 2) { let s = portScan.get(p.src); if (!s) portScan.set(p.src, s = { set: new Set(), pk: [] }); s.set.add(p.dst + ':' + p.dport); s.pk.push(p.no); }
   const scanners = new Set();
-  for (const [src, s] of portScan) if (s.set.size >= 15) {
+  for (const [src, s] of portScan) if (s.set.size >= CFG.scanTargets) {
     scanners.add(src);
     addProblem({ sev: 'high', type: 'scan', title: 'Olası port taraması', flow: null, pkts: s.pk, ts: packets[s.pk[0] - 1] ? packets[s.pk[0] - 1].ts : t0,
       plain: `${nm(src)} adresi kısa sürede ${s.set.size} farklı hedef/porta bağlantı denemesi yaptı. Bu, ağdaki açık servisleri arayan bir tarama davranışına benzer.`,
@@ -410,7 +411,7 @@ function analyze(packets) {
     const where = `${nm(f.server)}${f.bPort != null ? ':' + f.bPort : ''}`;
     const base = { flow: f.id, ts: f.start };
     if (f.proto === 'TCP') {
-      if (f.retrans > 0 && !(f.syn && !f.synack)) addProblem({ ...base, sev: f.retrans >= 3 ? 'med' : 'low', type: 'retrans', title: `Yeniden iletim (${f.retrans} paket)`, pkts: packets.filter(p => p.flow === f.id && p.anoms.includes('retrans')).map(p => p.no),
+      if (f.retrans > 0 && !(f.syn && !f.synack)) addProblem({ ...base, sev: f.retrans >= CFG.retransMed ? 'med' : 'low', type: 'retrans', title: `Yeniden iletim (${f.retrans} paket)`, pkts: packets.filter(p => p.flow === f.id && p.anoms.includes('retrans')).map(p => p.no),
         plain: `${where} ile olan bağlantıda ${f.retrans} paket tekrar gönderildi. Paket ya kayboldu ya da onayı (ACK) gelmedi. Yavaşlama ve takılmalara yol açar.`,
         advice: 'Wi-Fi sinyalini/kabloyu ve ağ yoğunluğunu kontrol edin. Sorun yalnızca bu sunucuda oluyorsa sorun sunucu veya servis sağlayıcı tarafında olabilir.' });
       if (f.zeroWin > 0) addProblem({ ...base, sev: 'med', type: 'zerowin', title: 'Alıcı veri almayı durdurdu (Zero Window)', pkts: packets.filter(p => p.flow === f.id && p.anoms.includes('zerowin')).map(p => p.no),
@@ -423,7 +424,7 @@ function analyze(packets) {
       else if (f.synack && f.rst > 0) addProblem({ ...base, sev: f.rstFirst && f.rstFirst.afterData ? 'med' : 'high', type: 'rst', title: 'Bağlantı aniden sıfırlandı (RST)', pkts: packets.filter(p => p.flow === f.id && p.anoms.includes('rst')).map(p => p.no),
         plain: `${where} ile olan bağlantı normal kapanmak yerine ${f.rstFirst && f.rstFirst.dir === 'BA' ? 'sunucu' : 'istemci'} tarafından aniden kesildi (RST).`,
         advice: 'Sunucu bağlantıyı reddetmiş, bir güvenlik duvarı/IPS bağlantıyı kesmiş veya uygulama çökmüş olabilir. Sunucu günlüklerine bakın.' });
-      if (f.rtt != null && f.rtt > 0.15) addProblem({ ...base, sev: 'low', type: 'slowrtt', title: `Yavaş bağlantı kurulumu (${Math.round(f.rtt * 1000)} ms)`, pkts: packets.filter(p => p.flow === f.id).slice(0, 3).map(p => p.no),
+      if (f.rtt != null && f.rtt > CFG.rttSlow) addProblem({ ...base, sev: 'low', type: 'slowrtt', title: `Yavaş bağlantı kurulumu (${Math.round(f.rtt * 1000)} ms)`, pkts: packets.filter(p => p.flow === f.id).slice(0, 3).map(p => p.no),
         plain: `${where} ile TCP el sıkışması ${Math.round(f.rtt * 1000)} ms sürdü. Sunucu uzak veya hat yavaş olabilir.`,
         advice: 'Daha yakın bir sunucu/CDN kullanmak veya VPN/proxy varsa kontrol etmek gecikmeyi azaltabilir.' });
     }
@@ -515,6 +516,6 @@ function describeFlow(f, A) {
   return bits.join(' ');
 }
 
-const API = { parseCapture, dissect, analyze, describePacket, describeFlow, isPrivate, flagStr, QTYPE, RCODE, TLSV, CIPHERS, cipherName, WEAK_CIPHERS, ascii, u16, u32 };
+const API = { cfg: CFG, parseCapture, dissect, analyze, describePacket, describeFlow, isPrivate, flagStr, QTYPE, RCODE, TLSV, CIPHERS, cipherName, WEAK_CIPHERS, ascii, u16, u32 };
 if (typeof module !== 'undefined' && module.exports) module.exports = API; else root.PL = API;
 })(typeof self !== 'undefined' ? self : this);

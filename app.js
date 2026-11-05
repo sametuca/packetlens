@@ -6,14 +6,39 @@ const $ = (s, r) => (r || document).querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const S = { A: null, raw: [], pk: [], mode: 'simple', tab: 'summary', timeRange: null, visPre: [], logTab: 'dns', probCat: 'all', query: null, qtext: '', flowFilter: null, pktSet: null, pktSetLabel: '', vis: [], visFlows: new Set(), selPkt: null, flowSort: 'start', follow: true, srv: null, live: { running: false, since: 0, timer: null, iface: 'any', dirty: false }, appColors: new Map() };
 const TOKEN = new URLSearchParams(location.search).get('t');
+const DEFAULTS = { lang: 'tr', theme: 'auto', density: 'normal', timefmt: 'rel', names: true,
+  dnsSlow: 250, rttSlow: 150, retransMed: 3, scanTargets: 15, tunnelSubs: 15, dgaNames: 20, sweepHosts: 15, off: [],
+  iface: '', capfilter: '', snap: 1600, max: 300000, duration: 0, promisc: true, follow: true, presets: [] };
+S.set = Object.assign({}, DEFAULTS); S.notes = {}; S.find = null; S.liveOpen = false;
+try { const j = JSON.parse(localStorage.getItem('pl-settings') || 'null'); if (j && typeof j === 'object') Object.assign(S.set, j); } catch (e) { /* yok say */ }
+if (!S.set.lang || !['tr', 'en'].includes(S.set.lang)) { try { S.set.lang = /^tr/i.test(navigator.language || '') ? 'tr' : 'en'; } catch (e) { S.set.lang = 'tr'; } }
 try { const m = localStorage.getItem('pl-mode'); if (m === 'adv' || m === 'simple') S.mode = m; } catch (e) { /* yok say */ }
+S.follow = S.set.follow !== false;
+let ROW = 26;
+function saveSettings() { try { localStorage.setItem('pl-settings', JSON.stringify(S.set)); } catch (e) { /* yok say */ } }
+function applySettings(re) {
+  const st = S.set, c = PL.cfg;
+  document.documentElement.dataset.theme = st.theme || 'auto'; document.documentElement.lang = st.lang;
+  ROW = st.density === 'compact' ? 22 : 26; document.documentElement.style.setProperty('--row', ROW + 'px');
+  c.dnsSlow = st.dnsSlow / 1000; c.rttSlow = st.rttSlow / 1000; c.retransMed = st.retransMed; c.scanTargets = st.scanTargets; c.tunnelSubs = st.tunnelSubs; c.dgaNames = st.dgaNames; c.sweepHosts = st.sweepHosts; c.off = new Set(st.off || []);
+  if (window.PLI) window.PLI.setLang(st.lang, false);
+  if (re && S.pk.length) { reanalyze(); render(); }
+}
+const L = () => (S.set.lang === 'en' ? 'en-US' : 'tr-TR');
+const T = s => (window.PLI ? window.PLI.t(s) : s);
 
 /* ---------- yardımcılar ---------- */
 const fmtB = n => n < 1024 ? n + ' B' : n < 1048576 ? (n / 1024).toFixed(1) + ' KB' : n < 1073741824 ? (n / 1048576).toFixed(1) + ' MB' : (n / 1073741824).toFixed(2) + ' GB';
 const fmtD = s => s < 1 ? Math.round(s * 1000) + ' ms' : s < 60 ? s.toFixed(1) + ' sn' : Math.floor(s / 60) + ' dk ' + Math.round(s % 60) + ' sn';
+const tcol = p => {
+  const f = S.set.timefmt;
+  if (f === 'abs') { const d = new Date(p.ts * 1000); return d.toTimeString().slice(0, 8) + '.' + String(d.getMilliseconds()).padStart(3, '0'); }
+  if (f === 'delta') { const q = S.A.packets[p.no - 2]; return (q ? p.ts - q.ts : 0).toFixed(6); }
+  return rel(p).slice(0, 9);
+};
 const fmtRate = bps => bps < 1e3 ? bps.toFixed(0) + ' bit/s' : bps < 1e6 ? (bps / 1e3).toFixed(1) + ' Kbit/s' : (bps / 1e6).toFixed(2) + ' Mbit/s';
 const rel = p => (p.ts - S.A.t0).toFixed(6);
-const nm = ip => S.A.nm(ip);
+const nm = ip => (S.set.names === false ? ip : S.A.nm(ip));
 const toast = msg => { const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => t.hidden = true, 2200); };
 const ANOM_SEV = { rst: 'bad', malformed: 'bad', 'dns-noresp': 'bad', 'icmp-unreach': 'bad', 'dns-error': 'bad', retrans: 'warn', zerowin: 'warn', 'dns-slow': 'warn', 'dns-nx': 'warn', 'icmp-ttl': 'warn' };
 const pSev = p => p.anoms.reduce((s, a) => ANOM_SEV[a] === 'bad' ? 'bad' : (s === 'bad' ? s : (ANOM_SEV[a] || s)), '');
@@ -103,14 +128,16 @@ function parseQuery(text) {
 /* ---------- veri yükleme ---------- */
 function ingest(rawList, name) {
   S.raw = rawList; S.pk = rawList.map((r, i) => PL.dissect(r, i + 1));
-  S.live.name = name || ''; S.flowFilter = null; S.pktSet = null; S.selPkt = null; S.timeRange = null; S.appColors.clear();
+  S.live.name = name || ''; if (!S.live.running) S.live.since = 0; S.flowFilter = null; S.pktSet = null; S.selPkt = null; S.timeRange = null; S.appColors.clear();
   reanalyze(true);
-  $('#empty').hidden = true; $('#app').hidden = false;
+  $('#empty').hidden = true; $('#app').hidden = false; S.find = null; S.liveOpen = false; renderLivebar();
   if (S.tab === 'packets' && S.mode === 'simple') S.tab = 'summary';
+  if (S.tab === 'settings') S.tab = 'summary';
   render();
 }
 function reanalyze(full) {
   S.A = PL.analyze(S.pk);
+  if (S.set.names === false) S.A.nm = ip => ip;
   S.A.packets.forEach(p => { p._s = p.anoms.length ? pSev(p) : ''; });
   S.A.apps.forEach(a => appColor(a.app));
   computeVisible();
@@ -139,9 +166,14 @@ function loadSample() {
 /* ---------- üst çubuk / mod / sekmeler ---------- */
 function renderChrome() {
   $('#m-simple').classList.toggle('on', S.mode === 'simple'); $('#m-adv').classList.toggle('on', S.mode === 'adv');
-  const A = S.A; if (!A) return;
-  const tabs = [['summary', 'Özet'], ['problems', 'Sorunlar', A.problems.length], ['flows', 'Bağlantılar', A.flows.length], ['map', 'Harita'], ['charts', 'Grafik']];
+  $('#b-set').classList.toggle('on', S.tab === 'settings');
+  $('#l-tr').classList.toggle('on', S.set.lang === 'tr'); $('#l-en').classList.toggle('on', S.set.lang === 'en');
+  const A = S.A;
+  $('#app').classList.toggle('nodata', !A);
+  if (!A) { $('#tabs').innerHTML = ''; $('#qmeta').innerHTML = ''; return; }
+  const tabs = [['summary', 'Özet'], ['problems', 'Sorunlar', A.problems.length], ['flows', 'Bağlantılar', A.flows.length], ['devices', 'Cihazlar'], ['sites', 'Siteler'], ['map', 'Harita'], ['charts', 'Grafik']];
   if (S.mode === 'adv') tabs.push(['packets', 'Paketler', A.packets.length], ['stats', 'İstatistik'], ['logs', 'Günlükler']);
+  tabs.push(['settings', '⚙ Ayarlar']);
   if (!tabs.some(t => t[0] === S.tab)) S.tab = 'summary';
   $('#tabs').innerHTML = tabs.map(t => `<button class="tab ${S.tab === t[0] ? 'on' : ''}" data-act="tab" data-v="${t[0]}" role="tab">${t[1]}${t[2] != null ? `<span class="badge ${t[0] === 'problems' && A.stats.high ? 'bad' : ''}">${t[2]}</span>` : ''}</button>`).join('');
   const meta = [];
@@ -151,13 +183,14 @@ function renderChrome() {
   if (S.flowFilter) meta.push(`<button class="chip on" data-act="clrflow">Bağlantı #${S.flowFilter} ✕</button>`);
   if (S.pktSet) meta.push(`<button class="chip on" data-act="clrset">${esc(S.pktSetLabel)} ✕</button>`);
   if (S.query && S.query.wire) meta.push(`<span>Wireshark filtresi:</span><span class="wire">${esc(S.query.wire)}</span><button class="btn sm ghost" data-act="copywire">Kopyala</button>`);
-  if (!meta.length) meta.push(['sorunlar', 'yavaş dns', 'tls', 'şifresiz', 'tcp.port == 443', 'dns.time > 0.1'].map(x => `<button class="chip" data-act="try" data-v="${esc(x)}">${esc(x)}</button>`).join(' '));
+  if (!meta.length) { meta.push(['sorunlar', 'yavaş dns', 'tls', 'şifresiz', 'tcp.port == 443', 'dns.time > 0.1'].map(x => `<button class="chip" data-act="try" data-v="${esc(x)}">${esc(x)}</button>`).join(' '));
+    if ((S.set.presets || []).length) meta.push('<span class="muted">|</span>', S.set.presets.map(x => `<button class="chip pre" data-act="try" data-v="${esc(x.f)}" title="${esc(x.f)}">★ ${esc(x.n)}</button>`).join(' ')); }
   $('#qmeta').innerHTML = meta.join(' ');
   $('#clearq').hidden = !S.qtext;
 }
 function render() {
-  if (!S.A) return;
   renderChrome();
+  if (!S.A && S.tab !== 'settings') return;
   const v = $('#view'), sc = v.scrollTop;
   const R = Object.assign({ summary: renderSummary, problems: renderProblems, flows: renderFlows, packets: renderPackets }, (window.PLApp && window.PLApp.views) || {});
   (R[S.tab] || renderSummary)(v);
@@ -187,7 +220,7 @@ function renderSummary(v) {
   <div class="banner ${banner[0]}"><span style="font-size:22px">${banner[1]}</span><div><b>${banner[2]}</b><span class="muted">${banner[3]}</span></div>
     ${st.problems ? '<button class="btn" style="margin-left:auto" data-act="tab" data-v="problems">Sorunları gör</button>' : ''}</div>
   <div class="kpis">
-    <div class="kpi"><div class="v">${st.packets.toLocaleString('tr')}</div><div class="l">paket</div></div>
+    <div class="kpi"><div class="v">${st.packets.toLocaleString(L())}</div><div class="l">paket</div></div>
     <div class="kpi"><div class="v">${fmtB(st.bytes)}</div><div class="l">toplam veri · ort. ${fmtRate(st.avgRate)}</div></div>
     <div class="kpi"><div class="v">${fmtD(st.duration)}</div><div class="l">süre</div></div>
     <div class="kpi"><div class="v">${st.flows}</div><div class="l">bağlantı</div></div>
@@ -237,7 +270,7 @@ function renderFlows(v) {
   const adv = S.mode === 'adv';
   const LBL = { ok: 'sağlıklı', warn: 'uyarı', bad: 'sorunlu' };
   const rows = l.slice(0, 1500).map(f => `<tr data-act="flow" data-v="${f.id}">
-    <td><span class="st ${f.status}" title="${LBL[f.status]}"></span></td>
+    <td><span class="st ${f.status}" title="${LBL[f.status]}"></span>${S.notes[f.id] ? '<span title="Not var">📝</span>' : ''}</td>
     <td><i class="dot" style="background:${appColor(f.app)};display:inline-block;margin-right:6px"></i>${esc(f.app)}</td>
     <td>${esc(nm(f.client))}${adv && f.aPort != null ? '<span class="muted">:' + f.aPort + '</span>' : ''} <span class="muted">→</span> ${esc(nm(f.server))}${f.bPort != null ? '<span class="muted">:' + f.bPort + '</span>' : ''}</td>
     ${adv ? `<td>${f.proto}</td><td class="num">${f.pkts}</td><td class="num">${f.rtt != null ? Math.round(f.rtt * 1000) + ' ms' : '–'}</td><td class="num">${f.retrans || ''}</td>` : ''}
@@ -248,9 +281,8 @@ function renderFlows(v) {
 }
 
 /* ---------- Paketler (sanal liste) ---------- */
-const ROW = 26;
 function renderPackets(v) {
-  v.innerHTML = `<div class="pk-split"><div class="pk-list"><div class="pk-head"><span>No</span><span>Zaman</span><span>Kaynak</span><span>Hedef</span><span>Protokol</span><span>Boyut</span><span>Bilgi</span></div>
+  v.innerHTML = `<div class="pk-split"><div class="pk-list">${X().findBar ? X().findBar() : ''}<div class="pk-head"><span>No</span><span>${S.set.timefmt === 'delta' ? 'Fark' : S.set.timefmt === 'abs' ? 'Saat' : 'Zaman'}</span><span>Kaynak</span><span>Hedef</span><span>Protokol</span><span>Boyut</span><span>Bilgi</span></div>
     <div class="pk-body" id="pkb" tabindex="0"><div id="pki" style="position:relative"></div></div>
     <div class="muted small" style="padding:6px 10px;border-top:1px solid var(--line);display:flex;gap:12px;align-items:center"><span id="pkcount"></span>${S.live.running ? '<label><input type="checkbox" id="follow" ' + (S.follow ? 'checked' : '') + '> Otomatik kaydır</label>' : ''}<span style="margin-left:auto">↑↓ ile gezin</span></div></div>
     <div class="pk-detail" id="pkd"></div></div>`;
@@ -261,11 +293,12 @@ function renderPackets(v) {
   const fl = $('#follow'); if (fl) fl.onchange = () => { S.follow = fl.checked; };
   updatePacketList(true); renderDetail();
 }
+const X = () => (window.PLApp && window.PLApp.extra) || {};
 function idxOf(no) { const l = S.vis; let lo = 0, hi = l.length - 1; while (lo <= hi) { const m = (lo + hi) >> 1; if (l[m].no === no) return m; if (l[m].no < no) lo = m + 1; else hi = m - 1; } return -1; }
 function updatePacketList(reset) {
   const body = $('#pkb'); if (!body) return;
   $('#pki').style.height = S.vis.length * ROW + 'px';
-  $('#pkcount').textContent = `${S.vis.length.toLocaleString('tr')} / ${S.A.packets.length.toLocaleString('tr')} paket`;
+  $('#pkcount').textContent = `${S.vis.length.toLocaleString(L())} / ${S.A.packets.length.toLocaleString(L())} paket`;
   if (S.live.running && S.follow && !reset) body.scrollTop = body.scrollHeight;
   drawRows();
 }
@@ -275,8 +308,8 @@ function drawRows() {
   let html = '';
   for (let i = s; i < e; i++) {
     const p = S.vis[i];
-    html += `<div class="pk-row ${p._s} ${p.no === S.selPkt ? 'sel' : ''}" data-no="${p.no}" style="top:${i * ROW}px;border-left-color:${appColor(S.A.flows[p.flow - 1].app)}">
-      <span>${p.no}</span><span>${rel(p).slice(0, 9)}</span><span title="${esc(p.src)}">${esc(nm(p.src))}</span><span title="${esc(p.dst)}">${esc(nm(p.dst))}</span><span>${esc(p.app)}</span><span>${p.len}</span><span title="${esc(p.info)}">${esc(p.info)}</span></div>`;
+    html += `<div class="pk-row ${p._s} ${p.no === S.selPkt ? 'sel' : ''} ${S.find && S.find.set.has(p.no) ? 'hit' : ''}" data-no="${p.no}" style="top:${i * ROW}px;border-left-color:${appColor(S.A.flows[p.flow - 1].app)}">
+      <span>${p.no}</span><span>${tcol(p)}</span><span title="${esc(p.src)}">${esc(nm(p.src))}</span><span title="${esc(p.dst)}">${esc(nm(p.dst))}</span><span>${esc(p.app)}</span><span>${p.len}</span><span title="${esc(p.info)}">${esc(p.info)}</span></div>`;
   }
   $('#pki').innerHTML = html;
 }
@@ -322,6 +355,7 @@ function openFlow(id) {
   const A = S.A, f = A.flows[id - 1], pk = f.pnos.map(n => A.packets[n - 1]), X = window.PLApp.extra;
   openDrawer(`<h2>${esc(nm(f.client))} ↔ ${esc(nm(f.server))}</h2><p>${esc(PL.describeFlow(f, A))}</p>
     <div class="row" style="justify-content:flex-start;margin:10px 0"><button class="btn sm primary" data-act="vfollow" data-v="${id}">⇄ Akışı takip et</button><button class="btn sm" data-act="flowpk" data-v="${id}">${S.mode === 'adv' ? 'Paketler sekmesinde aç' : 'Gelişmiş modda paketleri aç'}</button></div>
+    ${X && X.noteBox ? X.noteBox(id) : ''}
     ${X && X.tlsHTML ? X.tlsHTML(f) : ''}
     ${f.probs.length ? '<h3>Sorunlar</h3>' + f.probs.map(probHTML).join('') : '<p><span class="pill ok">sağlıklı</span> Bu bağlantıda sorun tespit edilmedi.</p>'}
     ${X && X.seqSVG ? '<h3>Sıra diyagramı</h3>' + X.seqSVG(f) : ''}
@@ -337,35 +371,57 @@ function openProbPk(id) {
 /* ---------- Canlı yakalama ---------- */
 const api = (path, opt) => fetch(path + (path.includes('?') ? '&' : '?') + 't=' + encodeURIComponent(TOKEN), opt).then(r => r.json().then(j => ({ ok: r.ok, j })));
 function b64u8(s) { const b = atob(s), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
+function maskBits(m) { return String(m).split('.').reduce((n, o) => n + (+o).toString(2).replace(/0/g, '').length, 0); }
+async function loadNet() { try { const { ok, j } = await api('/api/net'); if (ok) S.net = j; } catch (e) { /* yok say */ } }
 async function initServer() {
   if (!TOKEN || location.protocol === 'file:') return;
   try {
     const { ok, j } = await api('/api/info'); if (!ok) return;
-    S.srv = j; renderLivebar();
-    $('#live-hint').textContent = j.capture ? (j.root ? 'Canlı yakalama hazır: yukarıdan arayüzü seçip “Yakalamayı başlat”a basın.' : 'Canlı yakalama için programı sudo ile başlatın (şu an root değil).') : 'Canlı yakalama kapalı (--no-capture).';
+    S.srv = j; await loadNet(); renderLivebar();
+    $('#live-hint').textContent = j.capture ? (j.root ? 'Canlı analiz hazır: “▶ Analiz et” düğmesine basın.' : 'Canlı analiz için programı sudo ile başlatın (şu an root değil).') : 'Canlı yakalama kapalı (--no-capture).';
   } catch (e) { /* sunucu yok: sadece dosya modu */ }
 }
 function renderLivebar() {
-  const bar = $('#livebar'), s = S.srv; if (!s || !s.capture) { bar.hidden = true; return; }
+  const bar = $('#livebar'), s = S.srv, b = $('#b-live');
+  if (S.live.running) { b.textContent = '■ Durdur'; b.className = 'btn danger big'; b.dataset.act = 'livestop'; }
+  else { b.textContent = '▶ Analiz et'; b.className = 'btn primary big'; b.dataset.act = 'analyze'; }
+  if (!S.live.running && !S.liveOpen) { bar.hidden = true; return; }
   bar.hidden = false;
+  const cmd = '<span class="mono">sudo python3 packagelens.py</span>';
   if (S.live.running) {
     bar.innerHTML = `<span class="rec">CANLI</span><span class="muted">${esc(S.live.iface)}${S.live.filter ? ' · filtre: <span class="mono">' + esc(S.live.filter) + '</span>' : ''} · <b id="livecount">${S.pk.length}</b> paket</span><button class="btn danger sm" data-act="livestop">Durdur</button><a class="btn sm" href="/api/save?t=${encodeURIComponent(TOKEN)}" download>.pcap olarak kaydet</a>`;
+  } else if (!s) {
+    bar.innerHTML = `<b>Canlı analiz</b><span class="muted">Bu sayfa sunucu olmadan açılmış. Canlı analiz için programı terminalde şu komutla başlatın: ${cmd}</span><button class="btn sm ghost" data-act="analyze">Kapat ✕</button>`;
+  } else if (!s.capture) {
+    bar.innerHTML = `<b>Canlı analiz</b><span class="muted">Canlı yakalama kapalı (--no-capture ile başlatılmış). Açmak için şu komutla yeniden başlatın: ${cmd}</span><button class="btn sm ghost" data-act="analyze">Kapat ✕</button>`;
   } else {
-    bar.innerHTML = `<b>Canlı yakalama</b><select id="iface"><option value="any">Tüm arayüzler</option>${s.interfaces.map(i => `<option value="${esc(i.name)}" ${s.default_iface === i.name || S.live.iface === i.name ? 'selected' : ''}>${esc(i.name)} (${esc(i.state)})</option>`).join('')}</select><input id="capf" class="capf" value="${esc(S.live.filter || '')}" placeholder="Yakalama filtresi (isteğe bağlı): host 192.168.1.5 and port 443" spellcheck="false" autocomplete="off">
-      <button class="btn primary sm" data-act="livestart" ${s.root ? '' : 'disabled title="sudo ile başlatın"'}>● Yakalamayı başlat</button>
+    const st = S.set, defIf = (s.interfaces.find(i => i.default) || {}).name, ifc = S.live.iface && S.live.iface !== 'any' ? S.live.iface : (st.iface || s.default_iface || defIf || 'any');
+    const opts = [st.duration ? T(st.duration + ' sn sonra otomatik durur') : T('süre sınırı yok'), T('en fazla ' + st.max.toLocaleString(L()) + ' paket'), st.promisc ? T('promiscuous açık') : T('promiscuous kapalı')].join(' · ');
+    const kindIc = { ethernet: '🖧', wifi: '📶', loopback: '↺', virtual: '⧉' }, kindTx = { ethernet: 'Ethernet', wifi: 'Wi-Fi', loopback: 'Loopback', virtual: 'Sanal' };
+    const cards = [{ name: 'any', kind: 'any', state: 'up' }].concat(s.interfaces).map(i => i.kind === 'any'
+      ? `<button class="ifc ${ifc === 'any' ? 'on' : ''}" data-act="pickif" data-v="any"><span class="ifc-ic">🌐</span><b>${T('Tüm arayüzler')}</b><span class="muted small">any</span></button>`
+      : `<button class="ifc ${ifc === i.name ? 'on' : ''} ${i.state !== 'up' ? 'down' : ''}" data-act="pickif" data-v="${esc(i.name)}"><span class="ifc-ic">${kindIc[i.kind] || '🖧'}</span><b>${esc(i.name)}</b>${i.default ? `<span class="iftag">${T('internet çıkışı')}</span>` : ''}<span class="muted small">${T(kindTx[i.kind] || 'Ethernet')} · ${i.state === 'up' ? T('bağlı') : T('kapalı')}${i.speed > 0 ? ' · ' + i.speed + ' Mb/s' : ''}</span><span class="mono small">${esc(i.ipv4 ? i.ipv4 + (i.mask ? '/' + maskBits(i.mask) : '') : '—')}</span><span class="mono small muted">${esc(i.mac || '')}</span><span class="muted small">↓ ${fmtB(i.rx)} · ↑ ${fmtB(i.tx)}</span></button>`).join('');
+    const gw = S.net && S.net.gateway && S.net.gateway.ip ? `<span class="muted small">${T('Ağ geçidi')}: <span class="mono">${esc(S.net.gateway.ip)}</span>${S.net.dns && S.net.dns.length ? ' · DNS: <span class="mono">' + esc(S.net.dns.slice(0, 2).join(', ')) + '</span>' : ''}</span>` : '';
+    bar.innerHTML = `<div class="ifgrid" role="listbox" aria-label="${T('Ağ adaptörü')}">${cards}</div><input type="hidden" id="iface" value="${esc(ifc)}">${gw}<b class="sr"></b><input id="capf" class="capf" value="${esc(S.live.filter != null && S.live.since ? S.live.filter : (S.live.filter || st.capfilter || ''))}" placeholder="Yakalama filtresi (isteğe bağlı): host 192.168.1.5 and port 443" spellcheck="false" autocomplete="off">
+      <button class="btn primary" data-act="livestart" ${s.root ? '' : 'disabled title="sudo ile başlatın"'}>▶ Analizi başlat</button>
       ${S.pk.length && S.live.since ? `<a class="btn sm" href="/api/save?t=${encodeURIComponent(TOKEN)}" download>.pcap olarak kaydet</a>` : ''}
-      ${s.root ? '' : '<span class="muted small">Root değilsiniz: canlı yakalama için <span class="mono">sudo python3 packagelens.py</span></span>'}`;
+      <span class="muted small">${opts} · <a href="#" data-act="settings">değiştir</a></span>
+      ${s.root ? '' : `<span class="muted small">Root değilsiniz: canlı analiz için ${cmd}</span>`}
+      <button class="btn sm ghost" data-act="analyze" title="Kapat">✕</button>`;
   }
 }
 async function liveStart() {
-  const iface = $('#iface').value, flt = ($('#capf').value || '').trim();
-  const { ok, j } = await api('/api/start?iface=' + encodeURIComponent(iface) + '&filter=' + encodeURIComponent(flt), { method: 'POST' });
+  const iface = $('#iface').value, flt = ($('#capf').value || '').trim(), st = S.set;
+  const qs = `iface=${encodeURIComponent(iface)}&filter=${encodeURIComponent(flt)}&snap=${st.snap}&max=${st.max}&duration=${st.duration}&promisc=${st.promisc ? 1 : 0}`;
+  const { ok, j } = await api('/api/start?' + qs, { method: 'POST' });
   if (!ok) { toast(j.error || 'Başlatılamadı'); return; }
-  S.live.running = true; S.live.since = 0; S.live.iface = iface; S.live.filter = flt; S.timeRange = null; S.pk = []; S.raw = []; S.selPkt = null; S.flowFilter = null; S.pktSet = null; S.appColors.clear();
+  S.liveOpen = false;
+  S.live.running = true; S.live.since = 0; S.live.iface = iface; S.live.filter = flt; S.timeRange = null; S.pk = []; S.raw = []; S.selPkt = null; S.flowFilter = null; S.pktSet = null; S.find = null; S.appColors.clear();
   $('#empty').hidden = true; $('#app').hidden = false;
   S.A = PL.analyze([]); S.A.nm = ip => ip; S.vis = []; S.visFlows = new Set();
+  if (S.tab === 'settings') S.tab = 'summary';
   if (S.mode === 'adv') S.tab = 'packets';
-  renderLivebar(); livePoll(); S.live.timer = setInterval(livePoll, 700);
+  renderLivebar(); render(); livePoll(); S.live.timer = setInterval(livePoll, 700);
 }
 async function livePoll() {
   if (livePoll.busy) return; livePoll.busy = true;
@@ -376,7 +432,7 @@ async function livePoll() {
       for (const [ts, len, b] of j.packets) { const r = { ts, len, data: b64u8(b), link: 1 }; S.raw.push(r); S.pk.push(PL.dissect(r, S.pk.length + 1)); }
       S.live.since += j.packets.length;
       if (S.pk.length < 20000 || Date.now() - (S.live.last || 0) > 3000) { reanalyze(false); S.live.last = Date.now(); }
-      const c = $('#livecount'); if (c) c.textContent = S.pk.length.toLocaleString('tr');
+      const c = $('#livecount'); if (c) c.textContent = S.pk.length.toLocaleString(L());
       if (S.tab === 'packets' && $('#pkb')) { renderChrome(); updatePacketList(); } else render();
     }
     if (!j.running && S.live.running) { stopLiveUI(); toast('Yakalama sona erdi'); }
@@ -407,11 +463,17 @@ document.addEventListener('click', e => {
   const el = e.target.closest('[data-act]'); if (!el) return;
   const act = el.dataset.act, v = el.dataset.v;
   if (el.tagName === 'A') e.preventDefault();
+  if (el.classList.contains('menu-item')) { const mp = $('#menu-pop'); if (mp) mp.hidden = true; }
   switch (act) {
     case 'mode': S.mode = v; try { localStorage.setItem('pl-mode', v); } catch (x) { /* yok say */ } if (S.mode === 'simple' && ['packets', 'stats', 'logs'].includes(S.tab)) S.tab = 'flows'; render(); renderChrome(); break;
+    case 'menu': { const p = $('#menu-pop'); p.hidden = !p.hidden; $('#b-menu').setAttribute('aria-expanded', String(!p.hidden)); return; }
     case 'open': $('#file').click(); break;
+    case 'pickif': { const c = $('#capf'); if (c) S.live.filter = c.value; S.live.iface = v; S.set.iface = v; renderLivebar(); return; }
+    case 'analyze': S.liveOpen = !S.liveOpen; if (S.liveOpen) loadNet().then(renderLivebar); renderLivebar(); if (S.liveOpen) { const c = $('#capf'); if (c) c.focus(); } break;
+    case 'settings': S.tab = S.tab === 'settings' ? (S.A ? 'summary' : 'summary') : 'settings'; if (S.tab === 'settings') { $('#empty').hidden = true; $('#app').hidden = false; } else if (!S.A) { $('#empty').hidden = false; $('#app').hidden = true; } S.liveOpen = false; renderLivebar(); render(); break;
+    case 'lang': S.set.lang = v; saveSettings(); applySettings(false); render(); renderLivebar(); if (window.PLI) window.PLI.apply(document.body); break;
     case 'sample': loadSample(); break;
-    case 'tab': S.tab = v; render(); break;
+    case 'tab': S.tab = v; render(); if (S.tab === 'settings' && !S.A) { $('#empty').hidden = true; $('#app').hidden = false; } break;
     case 'clearq': setQuery(''); break;
     case 'try': setQuery(v); break;
     case 'clrflow': S.flowFilter = null; computeVisible(); render(); break;
@@ -443,14 +505,21 @@ document.addEventListener('keydown', e => {
 });
 let qt; $('#q').addEventListener('input', e => { clearTimeout(qt); qt = setTimeout(() => setQuery(e.target.value), 160); });
 let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (S.A && S.tab === 'summary') render(); }, 200); });
+$('#q').addEventListener('keydown', e => { if (e.key === 'Enter') { clearTimeout(qt); setQuery(e.target.value); } });
+document.addEventListener('click', e => { const p = $('#menu-pop'); if (p && !p.hidden && !e.target.closest('#menu')) p.hidden = true; });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') { const p = $('#menu-pop'); if (p) p.hidden = true; } });
 $('#file').addEventListener('change', e => { if (e.target.files[0]) loadFile(e.target.files[0]); e.target.value = ''; });
 ['dragover', 'dragenter'].forEach(t => document.addEventListener(t, e => { e.preventDefault(); const d = $('#drop'); if (d) d.classList.add('over'); }));
 ['dragleave', 'drop'].forEach(t => document.addEventListener(t, e => { e.preventDefault(); const d = $('#drop'); if (d) d.classList.remove('over'); }));
 document.addEventListener('drop', e => { const f = e.dataTransfer && e.dataTransfer.files[0]; if (f) loadFile(f); });
 
+applySettings(false);
 renderChrome();
+renderLivebar();
 initServer();
 window.PLApp = { S, PL, PLF, $, esc, fmtB, fmtD, fmtRate, rel, nm, toast, appColor, setQuery, render, renderChrome, computeVisible, openDrawer, closeDrawer, selectPacket, pSev, evtList, views: {}, extra: {},
+  DEFAULTS, saveSettings, applySettings, reanalyze, ingest, loadBuffer, renderLivebar, L, tcol, drawRows, updatePacketList, probHTML, SEC, PERF, catOf, api,
   goPacket(no) { closeDrawer(); S.tab = 'packets'; render(); selectPacket(no, true); } };
 window.__PL = { S, parseQuery };
 })();
+if (window.PLI) window.PLI.apply(document.body);

@@ -21,7 +21,11 @@ STATIC = {'/': ('index.html', 'text/html; charset=utf-8'), '/style.css': ('style
           '/sample.js': ('sample.js', 'application/javascript; charset=utf-8'),
           '/filter.js': ('filter.js', 'application/javascript; charset=utf-8'),
           '/extras.js': ('extras.js', 'application/javascript; charset=utf-8'),
-          '/views.js': ('views.js', 'application/javascript; charset=utf-8')}
+          '/views.js': ('views.js', 'application/javascript; charset=utf-8'),
+          '/tools.js': ('tools.js', 'application/javascript; charset=utf-8'),
+          '/features.js': ('features.js', 'application/javascript; charset=utf-8'),
+          '/i18n.js': ('i18n.js', 'application/javascript; charset=utf-8'),
+          '/lang-en.js': ('lang-en.js', 'application/javascript; charset=utf-8')}
 SNAP = 1600           # paket başına saklanan en fazla bayt (başlıklar + TLS hello için yeterli)
 MAX_PACKETS = 300000  # bellek koruması
 
@@ -36,11 +40,13 @@ class Capture:
         self.error = None
         self.thread = None
         self.stop_ev = threading.Event()
+        self.snap, self.max_packets, self.duration = SNAP, MAX_PACKETS, 0
         self.flt = None
         self.flt_text = ''
 
-    def start(self, iface, flt_text=''):
+    def start(self, iface, flt_text='', snap=SNAP, max_packets=MAX_PACKETS, duration=0, promisc=True):
         self.stop()
+        self.snap, self.max_packets, self.duration = snap, max_packets, duration
         self.flt = compile_filter(flt_text)   # FilterError çağırana gider
         self.flt_text = (flt_text or '').strip()
         with self.lock:
@@ -50,6 +56,11 @@ class Capture:
             s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(3))
             if iface and iface != 'any':
                 s.bind((iface, 0))
+                if promisc:   # Wireshark gibi: başka cihazlara giden trafiği de gör (PACKET_ADD_MEMBERSHIP / PACKET_MR_PROMISC)
+                    try:
+                        s.setsockopt(263, 1, struct.pack('iHH8s', socket.if_nametoindex(iface), 1, 0, b'\0' * 8))
+                    except OSError:
+                        pass
             s.settimeout(0.3)
         except PermissionError:
             self.error = 'Yakalama için root yetkisi gerekir. Şu şekilde başlatın: sudo python3 packagelens.py'
@@ -64,8 +75,11 @@ class Capture:
         return True
 
     def _loop(self, s):
+        t_end = time.time() + self.duration if self.duration else None
         try:
             while not self.stop_ev.is_set():
+                if t_end and time.time() >= t_end:
+                    break
                 try:
                     data, addr = s.recvfrom(65535)
                 except socket.timeout:
@@ -83,10 +97,10 @@ class Capture:
                     if len(data) >= 14 + ihl + 4 and SELF_PORT in struct.unpack('!HH', data[14 + ihl:18 + ihl]):
                         continue
                 with self.lock:
-                    if len(self.packets) >= MAX_PACKETS:
+                    if len(self.packets) >= self.max_packets:
                         self.dropped += 1
                         continue
-                    self.packets.append((time.time(), len(data), data[:SNAP]))
+                    self.packets.append((time.time(), len(data), data[:self.snap]))
         finally:
             s.close()
             self.running = False
@@ -121,18 +135,75 @@ SELF_PORT = 0
 TOKEN = secrets.token_urlsafe(16)
 
 
-def interfaces():
-    res = []
+def _read(path, default=''):
     try:
-        for n in sorted(os.listdir('/sys/class/net')):
-            try:
-                up = open('/sys/class/net/%s/operstate' % n).read().strip()
-            except OSError:
-                up = '?'
-            res.append({'name': n, 'state': up})
+        with open(path) as f:
+            return f.read().strip()
     except OSError:
-        pass
+        return default
+
+
+def _ioctl_ip(name, req):
+    try:
+        import fcntl
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            r = fcntl.ioctl(s.fileno(), req, struct.pack('256s', name[:15].encode()))
+        finally:
+            s.close()
+        return socket.inet_ntoa(r[20:24])
+    except Exception:
+        return ''
+
+
+def _hex_ip(h):
+    try:
+        return socket.inet_ntoa(struct.pack('<I', int(h, 16)))
+    except Exception:
+        return ''
+
+
+def interfaces():
+    """Ağ adaptörleri: ad, durum, tür, MAC, IPv4, hız, MTU, sayaçlar, varsayılan çıkış mı."""
+    res = []
+    gw_if = default_gateway()[0]
+    try:
+        names = sorted(os.listdir('/sys/class/net'))
+    except OSError:
+        names = []
+    for n in names:
+        base = '/sys/class/net/%s/' % n
+        kind = 'loopback' if n == 'lo' else 'wifi' if os.path.isdir(base + 'wireless') or os.path.isdir(base + 'phy80211') \
+            else 'virtual' if os.path.exists('/sys/devices/virtual/net/%s' % n) else 'ethernet'
+        try:
+            speed = int(_read(base + 'speed', '-1'))
+        except ValueError:
+            speed = -1
+        res.append({'name': n, 'state': _read(base + 'operstate', '?'), 'kind': kind, 'mac': _read(base + 'address'),
+                    'ipv4': _ioctl_ip(n, 0x8915), 'mask': _ioctl_ip(n, 0x891b), 'speed': speed if speed > 0 else None,
+                    'mtu': _read(base + 'mtu'), 'rx': _read(base + 'statistics/rx_bytes'), 'tx': _read(base + 'statistics/tx_bytes'),
+                    'default': n == gw_if})
     return res
+
+
+def default_gateway():
+    for line in _read('/proc/net/route').split('\n')[1:]:
+        f = line.split()
+        if len(f) > 3 and f[1] == '00000000' and int(f[3], 16) & 2:
+            return f[0], _hex_ip(f[2])
+    return '', ''
+
+
+def net_info():
+    """Bağlı olunan ağ: varsayılan ağ geçidi, DNS sunucuları ve ARP tablosundaki komşular."""
+    gi, gip = default_gateway()
+    dns = [l.split()[1] for l in _read('/etc/resolv.conf').split('\n') if l.startswith('nameserver') and len(l.split()) > 1]
+    arp = []
+    for line in _read('/proc/net/arp').split('\n')[1:]:
+        f = line.split()
+        if len(f) >= 6 and f[2] != '0x0' and f[3] != '00:00:00:00:00:00':
+            arp.append({'ip': f[0], 'mac': f[3], 'iface': f[5]})
+    return {'gateway': {'iface': gi, 'ip': gip}, 'dns': dns, 'arp': arp}
 
 
 class H(BaseHTTPRequestHandler):
@@ -180,14 +251,22 @@ class H(BaseHTTPRequestHandler):
             return self._send(401, {'error': 'token'})
         if u.path == '/api/info':
             return self._send(200, {'interfaces': interfaces(), 'root': os.geteuid() == 0, 'capture': not ARGS.no_capture, 'default_iface': ARGS.iface})
+        if u.path == '/api/net':
+            return self._send(200, net_info())
         if u.path == '/api/start' and method == 'POST':
             if ARGS.no_capture:
                 return self._send(400, {'error': 'Canlı yakalama kapalı (--no-capture).'})
             iface = q.get('iface', ['any'])[0]
             if iface != 'any' and iface not in [i['name'] for i in interfaces()]:
                 return self._send(400, {'error': 'Geçersiz arayüz'})
+            def num(name, default, lo, hi):
+                try:
+                    return min(hi, max(lo, int(q.get(name, [default])[0])))
+                except ValueError:
+                    return default
             try:
-                ok = CAP.start(iface, q.get('filter', [''])[0][:300])
+                ok = CAP.start(iface, q.get('filter', [''])[0][:300], num('snap', SNAP, 64, 65535), num('max', MAX_PACKETS, 1000, 2000000),
+                               num('duration', 0, 0, 86400), q.get('promisc', ['1'])[0] != '0')
             except FilterError as e:
                 return self._send(400, {'ok': False, 'error': 'Yakalama filtresi hatası: %s' % e})
             return self._send(200 if ok else 400, {'ok': ok, 'error': CAP.error})
@@ -201,7 +280,7 @@ class H(BaseHTTPRequestHandler):
                 since = 0
             return self._send(200, CAP.poll(since))
         if u.path == '/api/save':
-            fn = time.strftime('yakalama-%Y%m%d-%H%M%S.pcap')
+            fn = time.strftime('capture-%Y%m%d-%H%M%S.pcap')
             return self._send(200, CAP.pcap_bytes(), 'application/vnd.tcpdump.pcap', {'Content-Disposition': 'attachment; filename="%s"' % fn})
         return self._send(404, {'error': 'yok'})
 

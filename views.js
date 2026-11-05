@@ -2,6 +2,7 @@
 (function () {
 'use strict';
 const X = window.PLApp; if (!X) return;
+const T = s => (window.PLI ? window.PLI.t(s) : s);
 const { S, PL, esc, fmtB, fmtD, nm, appColor, toast, $ } = X;
 const fmtT = s => s < 0.001 ? '0' : s < 1 ? (s * 1000).toFixed(s < 0.01 ? 1 : 0) + ' ms' : s < 60 ? s.toFixed(s < 10 ? 2 : 1) + ' sn' : Math.floor(s / 60) + ' dk ' + Math.round(s % 60) + ' sn';
 const short = (s, n) => { s = String(s == null ? '' : s); return s.length > n ? s.slice(0, n - 1) + '…' : s; };
@@ -122,7 +123,7 @@ function renderMap(v) {
     const show = !hit(box); if (show) placed.push(box);
     return `<g class="mapnode" data-act="vnode" data-v="${esc(h.id)}" style="cursor:pointer"><circle cx="${h.x.toFixed(1)}" cy="${h.y.toFixed(1)}" r="${h.r.toFixed(1)}" fill="${loc ? 'var(--c0)' : 'var(--cx)'}" opacity=".9" stroke="${bad.has(h.id) ? 'var(--high)' : 'var(--surface)'}" stroke-width="${bad.has(h.id) ? 4 : 2}"/>
       ${show ? `<text x="${h.x.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" style="font-size:11px;fill:var(--text);paint-order:stroke;stroke:var(--surface);stroke-width:3px">${esc(label)}</text>` : ''}
-      <title>${esc(nm(h.id))}${nm(h.id) !== h.id ? ' (' + esc(h.id) + ')' : ''}\n${loc ? 'yerel ağ' : 'internet'}${host && host.os ? ' · tahmini: ' + esc(host.os) : ''}\n${fmtB(h.bytes)} · ${h.pk} paket · ${fl} bağlantı${bad.has(h.id) ? '\n⚠ sorunlu' : ''}</title></g>`;
+      <title>${esc(nm(h.id))}${nm(h.id) !== h.id ? ' (' + esc(h.id) + ')' : ''}\n${loc ? T('yerel ağ') : 'internet'}${host && host.os ? ' · ' + T('tahmini:') + ' ' + esc(T(host.os)) : ''}\n${fmtB(h.bytes)} · ${h.pk} ${T('paket')} · ${fl} ${T('bağlantı')}${bad.has(h.id) ? '\n⚠ ' + T('sorunlu') : ''}</title></g>`;
   }).join('');
   v.innerHTML = `<div class="toolbar"><label class="muted">Gösterilen cihaz <select id="mpn">${[15, 30, 60, 100].map(n => `<option ${MP.n === n ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
     <label class="muted"><input type="checkbox" id="mpl" ${MP.localOnly ? 'checked' : ''}> Sadece yerel ağ</label><span class="muted small">${list.length} cihaz, ${el.length} bağlantı. Bir cihaza tıklayarak o cihazın trafiğine odaklanın.</span></div>
@@ -153,7 +154,7 @@ function renderStats(v) {
 /* =============== GÜNLÜKLER =============== */
 function renderLogs(v) {
   const A = S.A, vn = visNos(), keep = n => !vn || vn.has(n);
-  const tabs = [['dns', 'DNS'], ['http', 'HTTP'], ['tls', 'TLS'], ['cred', 'Şifresiz oturumlar']];
+  const tabs = [['dns', 'DNS'], ['http', 'HTTP'], ['tls', 'TLS'], ['files', 'Dosyalar'], ['cred', 'Şifresiz oturumlar']];
   const t0 = A.t0, rc = { 0: 'NOERROR', 2: 'SERVFAIL', 3: 'NXDOMAIN', 5: 'REFUSED' };
   let body = '';
   if (S.logTab === 'dns') {
@@ -168,6 +169,8 @@ function renderLogs(v) {
     const l = PL.tlsLog(A).filter(e => keep(e.no));
     body = l.length ? table(['Zaman', 'İstemci', 'Site (SNI)', 'Sürüm', 'Şifre takımı', 'ALPN', 'Sertifika sahibi', '#El sıkışma', 'Not'], l.map(e => `<tr data-act="flow" data-v="${e.flow}"><td class="mono">${(e.t - t0).toFixed(3)}</td><td>${esc(nm(e.client))}</td><td>${esc(e.sni || nm(e.server))}</td>
       <td>${e.version != null ? esc(PL.TLSV[e.version] || '?') : '<span class="muted">?</span>'}</td><td class="mono">${e.cipher != null ? esc(PL.cipherName(e.cipher)) : ''}</td><td>${esc(e.alpn.join(', '))}</td><td>${esc((e.cert && e.cert.subject) || '')}</td><td class="num">${e.hsMs != null ? Math.round(e.hsMs) + ' ms' : ''}</td><td>${e.weak.length ? `<span class="pill med" title="${esc(e.weak.join('; '))}">zayıf</span>` : ''}</td></tr>`)) : '<div class="empty-note">TLS el sıkışması yakalanmadı.</div>';
+  } else if (S.logTab === 'files') {
+    body = X.extra.filesHTML ? X.extra.filesHTML() : '';
   } else {
     const l = (A.creds || []).filter(c => keep(c.no));
     body = `<div class="banner warn" style="margin-bottom:12px"><span style="font-size:20px">!</span><div><b>Parolalar maskelenir</b><span class="muted">Yalnızca şifresiz gönderildiği tespit edilir; tam parola saklanmaz ve gösterilmez.</span></div></div>` +

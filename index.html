@@ -8,14 +8,29 @@
 </head>
 <body>
 <header class="top">
-  <div class="brand"><span class="logo" aria-hidden="true">◎</span><b>PackageLens</b><span class="tag">ağ trafiğini anlaşılır kılar</span></div>
+  <div class="brand"><span class="logo" aria-hidden="true">◎</span><b>PackageLens</b></div>
   <div class="top-actions">
-    <div class="seg" role="group" aria-label="Mod">
-      <button data-act="mode" data-v="simple" id="m-simple">Basit</button>
-      <button data-act="mode" data-v="adv" id="m-adv">Gelişmiş</button>
+    <div class="menu" id="menu">
+      <button class="btn" data-act="menu" id="b-menu" aria-haspopup="true" aria-expanded="false">☰ Menü ▾</button>
+      <div class="menu-pop" id="menu-pop" hidden>
+        <div class="menu-lab">Görünüm</div>
+        <div class="seg wide" role="group" aria-label="Mod">
+          <button data-act="mode" data-v="simple" id="m-simple">Basit</button>
+          <button data-act="mode" data-v="adv" id="m-adv">Gelişmiş</button>
+        </div>
+        <div class="menu-lab">Dil</div>
+        <div class="seg wide" role="group" aria-label="Language">
+          <button data-act="lang" data-v="tr" id="l-tr" title="Türkçe">TR</button>
+          <button data-act="lang" data-v="en" id="l-en" title="English">EN</button>
+        </div>
+        <hr>
+        <button class="menu-item" data-act="open">📂 Dosya aç</button>
+        <button class="menu-item" data-act="sample">🧪 Örnek yükle</button>
+        <button class="menu-item" data-act="settings">⚙ Ayarlar</button>
+      </div>
     </div>
-    <button class="btn" data-act="open">Dosya aç</button>
-    <button class="btn ghost" data-act="sample">Örnek yükle</button>
+    <button class="btn" data-act="settings" id="b-set" title="Ayarlar">⚙ Ayarlar</button>
+    <button class="btn primary big" data-act="analyze" id="b-live">▶ Analiz et</button>
     <input type="file" id="file" accept=".pcap,.pcapng,.cap" hidden>
   </div>
 </header>
@@ -29,7 +44,8 @@
       <h1>Bir yakalama dosyasını buraya bırakın</h1>
       <p>.pcap / .pcapng dosyası açın; PackageLens trafiği uygulamalara, bağlantılara ve sorunlara ayırıp düz dille anlatsın.</p>
       <div class="row">
-        <button class="btn primary" data-act="open">Dosya seç</button>
+        <button class="btn primary big" data-act="analyze">▶ Canlı analiz et</button>
+        <button class="btn" data-act="open">Dosya seç</button>
         <button class="btn" data-act="sample">Örnek yakalamayı dene</button>
       </div>
       <p class="muted small" id="live-hint"></p>
@@ -41,6 +57,8 @@
       <div class="sb-row">
         <input id="q" type="search" autocomplete="off" spellcheck="false" placeholder='Ara, sor ya da filtre yaz: "yavaş dns", "google.com", ip.addr == 192.168.1.23 && tcp.port == 443   ( / tuşu ile odaklan )'>
         <button class="btn ghost" data-act="clearq" id="clearq" hidden>Temizle</button>
+        <button class="btn" data-act="fl-lib" title="Hazır filtreler ve filtre rehberi">📚 Filtreler</button>
+        <button class="btn" data-act="fl-export" title="Rapor, CSV, JSON, .pcap">⇩ Dışa aktar</button>
       </div>
       <div class="sb-meta" id="qmeta"></div>
     </div>
@@ -54,11 +72,15 @@
 <div id="modal" hidden></div>
 <div id="toast" class="toast" hidden></div>
 
+<script src="i18n.js"></script>
+<script src="lang-en.js"></script>
 <script src="parser.js"></script>
 <script src="filter.js"></script>
 <script src="extras.js"></script>
+<script src="tools.js"></script>
 <script src="sample.js" onerror="void 0"></script>
 <script src="app.js"></script>
 <script src="views.js"></script>
+<script src="features.js"></script>
 </body>
 </html>
