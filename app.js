@@ -5,7 +5,7 @@ const PL = window.PL, PLF = window.PLF;
 const $ = (s, r) => (r || document).querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const S = { A: null, raw: [], pk: [], mode: 'simple', tab: 'summary', timeRange: null, visPre: [], logTab: 'dns', probCat: 'all', query: null, qtext: '', flowFilter: null, pktSet: null, pktSetLabel: '', vis: [], visFlows: new Set(), selPkt: null, flowSort: 'start', follow: true, srv: null, live: { running: false, since: 0, timer: null, iface: 'any', dirty: false }, appColors: new Map() };
-let srvInit = 'pending', srvInitDetail = '';
+let srvInit = 'pending', srvInitDetail = '', initServerSeq = 0, initServerRetryT = null;
 const DEFAULTS = { lang: 'tr', theme: 'auto', density: 'normal', timefmt: 'rel', names: true,
   dnsSlow: 250, rttSlow: 150, retransMed: 3, scanTargets: 15, tunnelSubs: 15, dgaNames: 20, sweepHosts: 15, off: [],
   iface: '', capfilter: '', snap: 1600, max: 300000, duration: 0, promisc: true, follow: true, presets: [] };
@@ -389,38 +389,80 @@ function liveConnectHint() {
   }
   return '';
 }
+function httpGetJson(url) {
+  return fetch(url, { cache: 'no-store', headers: { Accept: 'application/json' } })
+    .then(r => r.text().then(t => {
+      let j = {};
+      try { j = t ? JSON.parse(t) : {}; } catch (e) { /* geçersiz json */ }
+      return { ok: r.ok, status: r.status, j };
+    }))
+    .catch(() => new Promise((resolve, reject) => {
+      const x = new XMLHttpRequest();
+      x.open('GET', url, true);
+      x.onload = () => {
+        let j = {};
+        try { j = x.responseText ? JSON.parse(x.responseText) : {}; } catch (e) { /* yok say */ }
+        resolve({ ok: x.status >= 200 && x.status < 300, status: x.status, j });
+      };
+      x.onerror = () => reject(new Error('xhr'));
+      x.send();
+    }));
+}
+function scheduleInitServerRetry() {
+  clearTimeout(initServerRetryT);
+  if (srvInit !== 'fail' || location.protocol === 'file:' || !S.liveOpen) return;
+  initServerRetryT = setTimeout(() => initServer().then(() => renderLivebar()), 2000);
+}
 async function initServer() {
   if (location.protocol === 'file:') { srvInit = 'file'; return; }
+  const seq = ++initServerSeq;
+  clearTimeout(initServerRetryT);
   srvInit = 'loading';
   srvInitDetail = '';
+  renderLivebar();
   try {
-    const r = await fetch(location.origin + '/api/info', { cache: 'no-store' });
-    let j = {};
-    try { j = await r.json(); } catch (e) { /* boş gövde */ }
-    if (!r.ok) {
+    const { ok, status, j } = await httpGetJson(location.origin + '/api/info');
+    if (seq !== initServerSeq) return;
+    if (!ok) {
       srvInit = 'fail';
       S.srv = null;
-      if (r.status === 401) srvInitDetail = 'stale';
-      else if (r.status === 403) srvInitDetail = 'host';
-      else if (r.status === 404) srvInitDetail = '404';
-      else if (r.status >= 500) srvInitDetail = '500';
+      if (status === 401) srvInitDetail = 'stale';
+      else if (status === 403) srvInitDetail = 'host';
+      else if (status === 404) srvInitDetail = '404';
+      else if (status >= 500) srvInitDetail = '500';
       else srvInitDetail = 'http';
+      scheduleInitServerRetry();
+      renderLivebar();
+      return;
+    }
+    if (!j || !Array.isArray(j.interfaces)) {
+      srvInit = 'fail';
+      S.srv = null;
+      srvInitDetail = 'badjson';
+      scheduleInitServerRetry();
       renderLivebar();
       return;
     }
     S.srv = j;
     srvInit = 'ok';
-    await loadNet(); if (PL.loadOui) PL.loadOui(); renderLivebar();
-    const hint = $('#live-hint');
-    if (hint) {
-      if (!j.capture) hint.textContent = sysPlatformHint(j);
-      else hint.textContent = j.root ? 'Canlı analiz hazır: “▶ Analiz et” düğmesine basın.' : 'Canlı analiz için programı sudo ile başlatın (şu an root değil).';
-    }
-    if (window.PLApp && window.PLApp.checkUpdate) window.PLApp.checkUpdate(j.commit);
+    renderLivebar();
+    try {
+      await loadNet();
+      if (PL && PL.loadOui) await Promise.resolve(PL.loadOui());
+      const hint = $('#live-hint');
+      if (hint) {
+        if (!j.capture) hint.textContent = sysPlatformHint(j);
+        else hint.textContent = j.root ? 'Canlı analiz hazır: “▶ Analiz et” düğmesine basın.' : 'Canlı analiz için programı sudo ile başlatın (şu an root değil).';
+      }
+      if (window.PLApp && window.PLApp.checkUpdate) window.PLApp.checkUpdate(j.commit);
+    } catch (e2) { /* yan etkiler sunucu bağlantısını bozmaz */ }
+    renderLivebar();
   } catch (e) {
+    if (seq !== initServerSeq) return;
     srvInit = 'fail';
     S.srv = null;
     srvInitDetail = 'network';
+    scheduleInitServerRetry();
     renderLivebar();
   }
 }
@@ -445,17 +487,17 @@ function renderLivebar() {
     else if (srvInit === 'fail' && srvInitDetail === 'host') msg = 'Host reddedildi. Adres çubuğu <span class="mono">http://127.0.0.1:' + (location.port || '8765') + '</span> olmalı.';
     else if (srvInit === 'fail' && srvInitDetail === '404') msg = 'Bu adreste PacketLens API yok (yanlış sunucu?). Terminalde <span class="mono">./start.sh</span> veya <span class="mono">sudo python3 packetlens.py</span> ile başlatın.';
     else if (srvInit === 'fail' && srvInitDetail === '500') msg = 'Sunucu hatası (/api/info). Terminal penceresindeki hata satırına bakın; güncel kodu çekip sunucuyu yeniden başlatın.';
-    else if (srvInit === 'fail') msg = 'Sunucu yanıt vermedi. Kali’de program çalışıyor mu? Terminalde: <span class="mono">curl -s http://127.0.0.1:' + (location.port || '8765') + '/api/info | head</span>' + liveConnectHint();
+    else if (srvInit === 'fail') msg = 'Tarayıcı API’ye ulaşamadı. Terminalde <span class="mono">curl</span> JSON dönüyorsa <b>Ctrl+Shift+R</b> ile yenileyin veya <b>Yeniden dene</b>.' + liveConnectHint();
     else msg = `Sunucu bilinmiyor. Kali terminalinde: ${cmd}`;
-    bar.innerHTML = `<b>Canlı analiz</b><span class="muted">${msg}</span><button class="btn sm ghost" data-act="analyze">Kapat ✕</button>`;
+    bar.innerHTML = `<b>Canlı analiz</b><span class="muted">${msg}</span><button class="btn sm" data-act="retry-srv">Yeniden dene</button><button class="btn sm ghost" data-act="analyze">Kapat ✕</button>`;
   } else if (!s.capture) {
     const plat = (s.platform && !s.platform.startsWith('linux')) ? ' Bu ortamda (macOS/Windows) yalnızca .pcap dosyası analizi desteklenir; canlı yakalama için Linux gerekir.' : '';
     bar.innerHTML = `<b>Canlı analiz</b><span class="muted">Canlı yakalama kapalı (--no-capture).${plat} Dosya sürükleyip bırakabilirsiniz.</span><button class="btn sm ghost" data-act="analyze">Kapat ✕</button>`;
   } else {
-    const st = S.set, defIf = (s.interfaces.find(i => i.default) || {}).name, ifc = S.live.iface && S.live.iface !== 'any' ? S.live.iface : (st.iface || s.default_iface || defIf || 'any');
+    const ifaces = s.interfaces || [], st = S.set, defIf = (ifaces.find(i => i.default) || {}).name, ifc = S.live.iface && S.live.iface !== 'any' ? S.live.iface : (st.iface || s.default_iface || defIf || 'any');
     const opts = [st.duration ? T(st.duration + ' sn sonra otomatik durur') : T('süre sınırı yok'), T('en fazla ' + st.max.toLocaleString(L()) + ' paket'), st.promisc ? T('promiscuous açık') : T('promiscuous kapalı')].join(' · ');
     const kindIc = { ethernet: '🖧', wifi: '📶', loopback: '↺', virtual: '⧉' }, kindTx = { ethernet: 'Ethernet', wifi: 'Wi-Fi', loopback: 'Loopback', virtual: 'Sanal' };
-    const cards = [{ name: 'any', kind: 'any', state: 'up' }].concat(s.interfaces).map(i => i.kind === 'any'
+    const cards = [{ name: 'any', kind: 'any', state: 'up' }].concat(ifaces).map(i => i.kind === 'any'
       ? `<button class="ifc ${ifc === 'any' ? 'on' : ''}" data-act="pickif" data-v="any"><span class="ifc-ic">🌐</span><b>${T('Tüm arayüzler')}</b><span class="muted small">any</span></button>`
       : `<button class="ifc ${ifc === i.name ? 'on' : ''} ${i.state !== 'up' ? 'down' : ''}" data-act="pickif" data-v="${esc(i.name)}"><span class="ifc-ic">${kindIc[i.kind] || '🖧'}</span><b>${esc(i.name)}</b>${i.default ? `<span class="iftag">${T('internet çıkışı')}</span>` : ''}<span class="muted small">${T(kindTx[i.kind] || 'Ethernet')} · ${i.state === 'up' ? T('bağlı') : T('kapalı')}${i.speed > 0 ? ' · ' + i.speed + ' Mb/s' : ''}</span><span class="mono small">${esc(i.ipv4 ? i.ipv4 + (i.mask ? '/' + maskBits(i.mask) : '') : '—')}</span><span class="mono small muted">${esc(i.mac || '')}</span><span class="muted small">↓ ${fmtB(i.rx)} · ↑ ${fmtB(i.tx)}</span></button>`).join('');
     const gw = S.net && S.net.gateway && S.net.gateway.ip ? `<span class="muted small">${T('Ağ geçidi')}: <span class="mono">${esc(S.net.gateway.ip)}</span>${S.net.dns && S.net.dns.length ? ' · DNS: <span class="mono">' + esc(S.net.dns.slice(0, 2).join(', ')) + '</span>' : ''}</span>` : '';
@@ -526,6 +568,7 @@ document.addEventListener('click', e => {
     case 'menu': { const p = $('#menu-pop'); p.hidden = !p.hidden; $('#b-menu').setAttribute('aria-expanded', String(!p.hidden)); return; }
     case 'open': $('#file').click(); break;
     case 'pickif': { const c = $('#capf'); if (c) S.live.filter = c.value; S.live.iface = v; S.set.iface = v; renderLivebar(); return; }
+    case 'retry-srv': initServer().then(() => renderLivebar()); break;
     case 'analyze': S.liveOpen = !S.liveOpen; if (S.liveOpen && !S.srv) initServer().then(() => renderLivebar()); else if (S.liveOpen) loadNet().then(renderLivebar); renderLivebar(); if (S.liveOpen) { const c = $('#capf'); if (c) c.focus(); } break;
     case 'settings': S.tab = S.tab === 'settings' ? (S.A ? 'summary' : 'summary') : 'settings'; if (S.tab === 'settings') { $('#empty').hidden = true; $('#app').hidden = false; } else if (!S.A) { $('#empty').hidden = false; $('#app').hidden = true; } S.liveOpen = false; renderLivebar(); render(); break;
     case 'ptentes': S.mode = 'adv'; try { localStorage.setItem('pl-mode', 'adv'); } catch (x) { /* yok say */ } S.tab = 'ptentes'; $('#empty').hidden = true; $('#app').hidden = false; S.liveOpen = false; renderLivebar(); render(); break;
@@ -576,6 +619,9 @@ applySettings(false);
 renderChrome();
 renderLivebar();
 initServer();
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && S.liveOpen && !S.srv && srvInit === 'fail') initServer().then(() => renderLivebar());
+});
 window.PLApp = { S, PL, PLF, $, esc, fmtB, fmtD, fmtRate, rel, nm, toast, appColor, setQuery, render, renderChrome, computeVisible, openDrawer, closeDrawer, selectPacket, pSev, evtList, views: {}, extra: {},
   DEFAULTS, saveSettings, applySettings, reanalyze, ingest, loadBuffer, renderLivebar, L, tcol, drawRows, updatePacketList, probHTML, SEC, PERF, catOf, api,
   goPacket(no) { closeDrawer(); S.tab = 'packets'; render(); selectPacket(no, true); } };
