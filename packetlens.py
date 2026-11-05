@@ -12,6 +12,7 @@ Sunucu sadece 127.0.0.1 üzerinde dinler ve rastgele bir erişim anahtarı (toke
 import argparse, base64, json, os, secrets, socket, struct, subprocess, sys, threading, time, webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
+import urllib.request
 
 from capfilter import compile_filter, FilterError
 from ptentes import PT as PTENTES
@@ -150,7 +151,30 @@ class Capture:
 CAP = Capture()
 ARGS = None
 SELF_PORT = 0
-TOKEN = secrets.token_urlsafe(16)
+TOKEN_FILE = os.path.join(HERE, '.session_token')
+_TOKEN_CHARS = set('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_')
+
+
+def _load_or_make_token():
+    """Oturum anahtarını kalıcı dosyadan okur; yoksa/bozuksa yenisini üretip kaydeder.
+    Böylece programı yeniden başlatınca da aynı adres (ve eski sekmeler/yer imleri) çalışmaya devam eder."""
+    try:
+        t = open(TOKEN_FILE, 'r', encoding='utf-8').read().strip()
+        if 16 <= len(t) <= 64 and set(t) <= _TOKEN_CHARS:
+            return t
+    except OSError:
+        pass
+    t = secrets.token_urlsafe(16)
+    try:
+        with open(TOKEN_FILE, 'w', encoding='utf-8') as f:
+            f.write(t)
+        os.chmod(TOKEN_FILE, 0o600)
+    except OSError:
+        pass
+    return t
+
+
+TOKEN = _load_or_make_token()
 
 
 def _read(path, default=''):
@@ -385,6 +409,19 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self): self._handle('POST')
 
 
+def _running_instance_url(port):
+    """Aynı portta bizim sunucumuz zaten çalışıyor mu? Çalışıyorsa adresini döner,
+    yoksa None (yeni sunucu başlatılabilir anlamına gelir)."""
+    try:
+        with urllib.request.urlopen('http://127.0.0.1:%d/api/info?t=%s' % (port, TOKEN), timeout=1.2) as r:
+            data = json.loads(r.read().decode('utf-8'))
+        if data.get('repo') == 'sametuca/packetlens':
+            return 'http://127.0.0.1:%d/?t=%s' % (port, TOKEN)
+    except Exception:
+        pass
+    return None
+
+
 def open_browser(url):
     """root olarak çalışıyorsak tarayıcıyı normal kullanıcı olarak aç (Firefox root'u sevmez)."""
     user = os.environ.get('SUDO_USER')
@@ -416,9 +453,29 @@ def main():
         ARGS.no_capture = True
     if not ARGS.no_capture and os.geteuid() != 0:
         print('Not: root değilsiniz, canlı yakalama başlatılamaz (dosya analizi çalışır). Canlı yakalama için: sudo python3 packetlens.py')
-    srv = ThreadingHTTPServer(('127.0.0.1', ARGS.port), H)
+
+    running = _running_instance_url(ARGS.port)
+    if running:
+        print('PacketLens zaten çalışıyor → %s' % running)
+        print('(Yeni bir kopya başlatılmadı; mevcut oturum tarayıcıda açılıyor.)')
+        if not ARGS.no_browser:
+            threading.Timer(0.3, open_browser, (running,)).start()
+        return
+
+    srv, port = None, ARGS.port
+    for _ in range(20):
+        try:
+            srv = ThreadingHTTPServer(('127.0.0.1', port), H)
+            break
+        except OSError:
+            port += 1
+    if srv is None:
+        print('Boş port bulunamadı (%d - %d arası denendi).' % (ARGS.port, port - 1))
+        return
     SELF_PORT = srv.server_address[1]
     url = 'http://127.0.0.1:%d/?t=%s' % (SELF_PORT, TOKEN)
+    if SELF_PORT != ARGS.port:
+        print('Not: %d portu doluydu, %d kullanılıyor.' % (ARGS.port, SELF_PORT))
     print('PacketLens çalışıyor → %s' % url)
     print('Durdurmak için Ctrl+C')
     if not ARGS.no_browser:

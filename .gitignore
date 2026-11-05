@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 live*.pcap
 node_modules/
+.session_token
