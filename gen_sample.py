@@ -28,7 +28,11 @@ def mac_of(a): return MAC.get(a, MAC[GW])
 def eth(src, dst, t, pl, dmac=None): return m(dmac or mac_of(dst)) + m(mac_of(src)) + struct.pack('!H', t) + pl
 
 
-def ipv4(src, dst, proto, pl, ttl=64):
+TTL = {'192.168.1.23': 128, '192.168.1.1': 255, '192.168.1.80': 128, '198.51.100.7': 120, '93.184.216.34': 56, '104.18.32.7': 54, '142.250.74.46': 117}
+
+
+def ipv4(src, dst, proto, pl, ttl=None):
+    ttl = ttl or TTL.get(src, 64)
     return struct.pack('!BBHHHBBH4s4s', 0x45, 0, 20 + len(pl), random.getrandbits(16), 0x4000, ttl, proto, 0, ip(src), ip(dst)) + pl
 
 
@@ -66,24 +70,38 @@ def dns(t, name, ips, lat, rcode=0):
 def rnd(n): return bytes(random.getrandbits(8) for _ in range(n))
 
 
-def client_hello(sni):
+def client_hello(sni, versions=(0x0304, 0x0303), ciphers=(0x0a0a, 0x1301, 0x1302, 0xc02f, 0xc030, 0xcca8), alpn=('h2', 'http/1.1')):
     n = sni.encode()
     sn = struct.pack('!BH', 0, len(n)) + n
     snl = struct.pack('!H', len(sn)) + sn
     ext = struct.pack('!HH', 0, len(snl)) + snl
-    body = b'\x03\x03' + rnd(32) + b'\x00' + struct.pack('!H', 4) + b'\x13\x01\x13\x02' + b'\x01\x00' + struct.pack('!H', len(ext)) + ext
+    sv = bytes([len(versions) * 2]) + b''.join(struct.pack('!H', x) for x in versions)
+    ext += struct.pack('!HH', 0x002b, len(sv)) + sv
+    if alpn:
+        al = b''.join(bytes([len(x)]) + x.encode() for x in alpn)
+        al = struct.pack('!H', len(al)) + al
+        ext += struct.pack('!HH', 0x0010, len(al)) + al
+    cs = b''.join(struct.pack('!H', c) for c in ciphers)
+    legacy = 0x0303 if max(versions) >= 0x0303 else max(versions)
+    body = struct.pack('!H', legacy) + rnd(32) + b'\x00' + struct.pack('!H', len(cs)) + cs + b'\x01\x00' + struct.pack('!H', len(ext)) + ext
     hs = b'\x01' + struct.pack('!I', len(body))[1:] + body
     return b'\x16\x03\x01' + struct.pack('!H', len(hs)) + hs
 
 
-def server_hello():
-    body = b'\x03\x03' + rnd(32) + b'\x00' + b'\x13\x01' + b'\x00' + b'\x00\x00'
+def server_hello(cipher=0x1301, tls13=True, legacy=0x0303):
+    ext = struct.pack('!HHH', 0x002b, 2, 0x0304) if tls13 else b''
+    body = struct.pack('!H', legacy) + rnd(32) + b'\x00' + struct.pack('!H', cipher) + b'\x00' + struct.pack('!H', len(ext)) + ext
     hs = b'\x02' + struct.pack('!I', len(body))[1:] + body
     return b'\x16\x03\x03' + struct.pack('!H', len(hs)) + hs
 
 
-def cert(n=1200):
-    hs = b'\x0b' + struct.pack('!I', n)[1:] + rnd(n)
+def cert(n=1200, issuer='Example Trust CA', subject='www.google.com'):
+    def cn(x): return b'\x55\x04\x03\x0c' + bytes([len(x)]) + x.encode()
+    der = b'\x30\x82' + rnd(40) + cn(issuer) + rnd(60) + cn(subject)
+    der += rnd(max(0, n - len(der)))
+    lst = struct.pack('!I', len(der))[1:] + der
+    body = struct.pack('!I', len(lst))[1:] + lst
+    hs = b'\x0b' + struct.pack('!I', len(body))[1:] + body
     return b'\x16\x03\x03' + struct.pack('!H', len(hs)) + hs
 
 
@@ -162,7 +180,7 @@ c = Conn(4.7, CLI, '104.18.32.7', port(), 443, 0.180)
 c.handshake()
 c.send('c', PSH | ACK, client_hello('api.slow-service.net'), dt=0.001)
 c.send('s', PSH | ACK, server_hello(), dt=0.18)
-c.send('s', PSH | ACK, cert(), dt=0.001)
+c.send('s', PSH | ACK, cert(1100, 'Example Trust CA', 'api.slow-service.net'), dt=0.001)
 seqs = []
 for i in range(12):
     sq = c.send('s', ACK, appdata(1400), dt=0.01)
@@ -233,6 +251,72 @@ for i in range(3):
     t = 19.0 + i
     add(t, eth(CLI, GW, 0x0800, ipv4(CLI, GW, 1, struct.pack('!BBHHH', 8, 0, 0, 1, i) + rnd(48))))
     add(t + 0.004, eth(GW, CLI, 0x0800, ipv4(GW, CLI, 1, struct.pack('!BBHHH', 0, 0, 0, 1, i) + rnd(48))))
+
+# 14) Şifresiz kimlik bilgileri: HTTP Basic + form
+c = Conn(24.0, CLI, '192.168.1.80', port(), 80, 0.002)
+c.handshake()
+auth = base64.b64encode(b'admin:Summer2024!').decode()
+c.send('c', PSH | ACK, ('GET /admin HTTP/1.1\r\nHost: intranet.local\r\nAuthorization: Basic %s\r\n\r\n' % auth).encode(), dt=0.001)
+c.send('s', PSH | ACK, b'HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 120\r\n\r\n' + b'x' * 120, dt=0.003)
+form = 'username=samet&password=hunter2secret'
+c.send('c', PSH | ACK, ('POST /login HTTP/1.1\r\nHost: intranet.local\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: %d\r\n\r\n%s' % (len(form), form)).encode(), dt=0.05)
+c.send('s', PSH | ACK, b'HTTP/1.1 302 Found\r\nContent-Length: 0\r\n\r\n', dt=0.004)
+c.close()
+
+# 15) FTP girişi
+c = Conn(25.0, CLI, '192.168.1.60', port(), 21, 0.002)
+c.handshake()
+c.send('s', PSH | ACK, b'220 FTP ready\r\n', dt=0.001)
+c.send('c', PSH | ACK, b'USER ftpuser\r\n', dt=0.01)
+c.send('s', PSH | ACK, b'331 Password required\r\n', dt=0.002)
+c.send('c', PSH | ACK, b'PASS Passw0rd!\r\n', dt=0.01)
+c.send('s', PSH | ACK, b'230 Login ok\r\n', dt=0.002)
+c.close()
+
+# 16) ARP sahteciliği: saldırgan MAC'i ağ geçidinin IP'sini üstleniyor
+ATT = 'aa:bb:cc:00:00:66'
+for t in (26.0, 26.5):
+    add(t, m(MAC[CLI]) + m(ATT) + struct.pack('!H', 0x0806) + struct.pack('!HHBBH6s4s6s4s', 1, 0x0800, 6, 4, 2, m(ATT), ip(GW), m(MAC[CLI]), ip(CLI)))
+
+# 17) DNS tünelleme (uzun, rastgele etiketler, TXT sorguları)
+alpha = 'abcdefghijklmnopqrstuvwxyz234567'
+for i in range(40):
+    name = ''.join(random.choice(alpha) for _ in range(40)) + '.t.evil-tunnel.com'
+    iid, sp = random.getrandbits(16), port()
+    udp_pkt(27.0 + i * 0.05, CLI, GW, sp, 53, dns_q(iid, name, 16))
+    udp_pkt(27.0 + i * 0.05 + 0.02, GW, CLI, 53, sp, dns_r(iid, name, []))
+
+# 18) Beacon: her ~5 sn'de bir aynı sunucuya kısa TLS bağlantısı
+dns(29.5, 'updates.example-sync.com', ['203.0.113.9'], 0.02)
+for k in range(8):
+    c = Conn(30.0 + k * 5.0 + random.uniform(-0.03, 0.03), CLI, '203.0.113.9', port(), 443, 0.03)
+    c.handshake()
+    c.send('c', PSH | ACK, client_hello('updates.example-sync.com'), dt=0.001)
+    c.send('s', PSH | ACK, server_hello(), dt=0.03)
+    c.send('c', PSH | ACK, appdata(64), dt=0.01)
+    c.send('s', PSH | ACK, appdata(64), dt=0.03)
+    c.close()
+
+# 19) DGA benzeri: çok sayıda var olmayan alan adı
+for i in range(22):
+    name = ''.join(random.choice('abcdefghijklmnopqrstuvwxyz0123456789') for _ in range(random.randint(10, 14))) + '.com'
+    dns(22.0 + i * 0.1, name, [], 0.03, rcode=3)
+
+# 20) Eski TLS 1.0 + 3DES kullanan sunucu
+dns(23.0, 'old.legacy-bank.example', ['198.51.100.7'], 0.02)
+c = Conn(23.03, CLI, '198.51.100.7', port(), 443, 0.04)
+c.handshake()
+c.send('c', PSH | ACK, client_hello('old.legacy-bank.example', versions=(0x0301,), ciphers=(0x002f, 0x000a), alpn=()), dt=0.001)
+c.send('s', PSH | ACK, server_hello(cipher=0x000a, tls13=False, legacy=0x0301), dt=0.04)
+c.send('s', PSH | ACK, cert(900, 'Legacy Root CA', 'old.legacy-bank.example'), dt=0.001)
+c.send('c', PSH | ACK, appdata(80), dt=0.05)
+c.send('s', PSH | ACK, appdata(300), dt=0.04)
+c.close()
+
+# 21) Ping taraması (tarama yapan cihaz)
+for i, h in enumerate(range(2, 21)):
+    dst = '192.168.1.%d' % h
+    add(66.0 + i * 0.02, eth(SCAN, dst, 0x0800, ipv4(SCAN, dst, 1, struct.pack('!BBHHH', 8, 0, 0, 7, i) + rnd(32))))
 
 PK.sort(key=lambda x: x[0])
 out = struct.pack('<IHHiIII', 0xa1b2c3d4, 2, 4, 0, 0, 65535, 1)

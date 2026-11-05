@@ -1,4 +1,4 @@
-/* PaketLens - paket çözümleyici ve analiz motoru (tarayıcı + Node, bağımlılıksız) */
+/* PackageLens - paket çözümleyici ve analiz motoru (tarayıcı + Node, bağımlılıksız) */
 (function (root) {
 'use strict';
 
@@ -158,6 +158,7 @@ function dTCP(p, v, o, end) {
   Object.assign(p, { proto: 'TCP', sport: sp, dport: dp, seq, ack, flags: fl, win, payOff: po, payloadLen: Math.max(0, end - po) });
   let mss = null, ws = null, sack = false;
   for (let i = o + 20; i < po && i < end;) { const k = v[i]; if (k === 0) break; if (k === 1) { i++; continue; } const l = v[i + 1]; if (!l) break; if (k === 2) mss = u16(v, i + 2); if (k === 3) ws = v[i + 2]; if (k === 4) sack = true; i += l; }
+  p.opt = { mss, ws, sack };
   const f = [['Kaynak port', sp], ['Hedef port', dp], ['Sıra no (Seq)', seq], ['Onay no (Ack)', ack], ['Bayraklar', flagStr(fl) || '-'], ['Pencere (Window)', win], ['Veri uzunluğu', p.payloadLen + ' bayt']];
   if (mss !== null) f.push(['MSS', mss]); if (ws !== null) f.push(['Pencere ölçeği', ws]); if (sack) f.push(['SACK', 'destekleniyor']);
   p.layers.push({ name: 'TCP', fields: f });
@@ -173,10 +174,11 @@ function sniffTCP(p, v, po, end) {
   if (/^(GET|POST|HEAD|PUT|DELETE|OPTIONS|PATCH|CONNECT) /.test(head) || head.startsWith('HTTP/1.')) {
     const txt = ascii(v, po, Math.min(end, po + 2048)).replace(/\./g, c => c);
     const raw = String.fromCharCode.apply(null, Array.from(v.subarray(po, Math.min(end, po + 2048)))).split('\r\n');
-    const first = raw[0].replace(/[^\x20-\x7e]/g, '.'); let host = null, ctype = null;
-    for (let i = 1; i < raw.length && raw[i]; i++) { const m = /^([^:]+):\s*(.*)$/.exec(raw[i]); if (!m) continue; const k = m[1].toLowerCase(); if (k === 'host') host = m[2]; if (k === 'content-type') ctype = m[2]; }
+    const first = raw[0].replace(/[^\x20-\x7e]/g, '.'); let host = null, ctype = null, clen = null;
+    for (let i = 1; i < raw.length && raw[i]; i++) { const m = /^([^:]+):\s*(.*)$/.exec(raw[i]); if (!m) continue; const k = m[1].toLowerCase(); if (k === 'host') host = m[2]; if (k === 'content-type') ctype = m[2]; if (k === 'content-length') clen = +m[2]; }
     if (host) host = host.replace(/:\d+$/, '');
-    p.http = { first, host, ctype }; p.app = 'HTTP'; p.appSure = true;
+    const rq = /^([A-Z]+) (\S+) HTTP/.exec(first), rs = /^HTTP\/[\d.]+ (\d{3})/.exec(first);
+    p.http = { first, host, ctype, clen, method: rq ? rq[1] : null, path: rq ? rq[2] : null, status: rs ? +rs[1] : null }; p.app = 'HTTP'; p.appSure = true;
     p.layers.push({ name: 'HTTP', fields: [['İlk satır', first]].concat(host ? [['Host', host]] : [], ctype ? [['İçerik türü', ctype]] : []) });
     p.info = first + (host ? '  (Host: ' + host + ')' : ''); return;
   }
@@ -184,28 +186,65 @@ function sniffTCP(p, v, po, end) {
   if (t === 'SSH-') { p.app = 'SSH'; p.appSure = true; p.info = 'SSH sürüm bildirimi: ' + ascii(v, po, Math.min(end, po + 40)).replace(/\.+$/, ''); }
 }
 
+const TLSV = { 0x0300: 'SSL 3.0', 0x0301: 'TLS 1.0', 0x0302: 'TLS 1.1', 0x0303: 'TLS 1.2', 0x0304: 'TLS 1.3' };
+const CIPHERS = { 0x1301: 'TLS_AES_128_GCM_SHA256', 0x1302: 'TLS_AES_256_GCM_SHA384', 0x1303: 'TLS_CHACHA20_POLY1305_SHA256', 0xc02b: 'ECDHE-ECDSA-AES128-GCM-SHA256', 0xc02c: 'ECDHE-ECDSA-AES256-GCM-SHA384', 0xc02f: 'ECDHE-RSA-AES128-GCM-SHA256', 0xc030: 'ECDHE-RSA-AES256-GCM-SHA384', 0xcca8: 'ECDHE-RSA-CHACHA20-POLY1305', 0xcca9: 'ECDHE-ECDSA-CHACHA20-POLY1305', 0x009c: 'RSA-AES128-GCM-SHA256', 0x009d: 'RSA-AES256-GCM-SHA384', 0x002f: 'RSA-AES128-CBC-SHA', 0x0035: 'RSA-AES256-CBC-SHA', 0x000a: 'RSA-3DES-EDE-CBC-SHA', 0x0005: 'RSA-RC4-128-SHA' };
+const WEAK_CIPHERS = new Set([0x000a, 0x0005]);
+const isGrease = x => (x & 0x0f0f) === 0x0a0a && (x >> 8) === (x & 0xff);
+const cipherName = c => CIPHERS[c] || ('0x' + c.toString(16).padStart(4, '0'));
+
 function dTLS(p, v, po, end) {
   const rt = v[po], ver = u16(v, po + 1), rl = u16(v, po + 3);
   const RT = { 20: 'ChangeCipherSpec', 21: 'Alert', 22: 'Handshake', 23: 'Uygulama verisi' };
   p.app = 'HTTPS (TLS)'; p.appSure = true;
+  const tls = p.tls = { rt };
   const f = [['Kayıt türü', rt + ' (' + RT[rt] + ')'], ['Sürüm', '0x' + ver.toString(16).padStart(4, '0')], ['Kayıt uzunluğu', rl]];
   if (rt === 22 && end - po > 9) {
     const ht = v[po + 5], HT = { 1: 'ClientHello', 2: 'ServerHello', 4: 'NewSessionTicket', 11: 'Certificate', 12: 'ServerKeyExchange', 14: 'ServerHelloDone', 16: 'ClientKeyExchange', 20: 'Finished' };
+    tls.ht = ht;
     f.push(['Handshake türü', ht + ' (' + (HT[ht] || '?') + ')']);
     p.info = 'TLS ' + (HT[ht] || 'Handshake');
-    if (ht === 1) {
-      try {
-        let q = po + 43; q += 1 + v[q]; q += 2 + u16(v, q); q += 1 + v[q];
+    try {
+      if (ht === 1) {
+        let q = po + 43; q += 1 + v[q];
+        const cl = u16(v, q), ciphers = [];
+        for (let i = q + 2; i < q + 2 + cl && i + 1 < end; i += 2) { const c = u16(v, i); if (!isGrease(c)) ciphers.push(c); }
+        q += 2 + cl; q += 1 + v[q];
         const eend = Math.min(end, q + 2 + u16(v, q)); q += 2;
+        const versions = [], alpn = [];
         while (q + 4 <= eend) {
           const et = u16(v, q), el = u16(v, q + 2);
           if (et === 0 && el > 5) { const nl = u16(v, q + 7); p.sni = ascii(v, q + 9, q + 9 + nl); }
-          if (et === 16) { /* ALPN atla */ }
+          else if (et === 43 && el >= 3) { const l = v[q + 4]; for (let i = q + 5; i < q + 5 + l && i + 1 < end; i += 2) { const x = u16(v, i); if (!isGrease(x)) versions.push(x); } }
+          else if (et === 16 && el >= 3) { const ll = u16(v, q + 4); let i = q + 6; while (i < q + 6 + ll && i < end) { const n = v[i]; alpn.push(ascii(v, i + 1, i + 1 + n)); i += 1 + n; } }
           q += 4 + el;
         }
-      } catch (e) { /* SNI okunamadı */ }
-      if (p.sni) { f.push(['Sunucu adı (SNI)', p.sni]); p.info += ' → ' + p.sni; }
-    }
+        tls.ciphers = ciphers; tls.versions = versions; tls.alpn = alpn; tls.legacy = u16(v, po + 9);
+        if (p.sni) { f.push(['Sunucu adı (SNI)', p.sni]); p.info += ' → ' + p.sni; }
+        if (versions.length) f.push(['Önerilen sürümler', versions.map(x => TLSV[x] || '0x' + x.toString(16)).join(', ')]);
+        else f.push(['Önerilen sürümler', TLSV[tls.legacy] || '?']);
+        if (ciphers.length) f.push(['Şifre takımları', ciphers.length + ' adet: ' + ciphers.slice(0, 4).map(cipherName).join(', ') + (ciphers.length > 4 ? ' …' : '')]);
+        if (alpn.length) f.push(['ALPN (uygulama protokolü)', alpn.join(', ')]);
+      } else if (ht === 2) {
+        let q = po + 43; q += 1 + v[q];
+        const cs = u16(v, q); q += 3;
+        let sv = u16(v, po + 9);
+        if (q + 2 <= end) {
+          const eend = Math.min(end, q + 2 + u16(v, q)); q += 2;
+          while (q + 4 <= eend) { const et = u16(v, q), el = u16(v, q + 2); if (et === 43 && el >= 2) sv = u16(v, q + 4); q += 4 + el; }
+        }
+        tls.cipher = cs; tls.version = sv;
+        f.push(['Seçilen sürüm', TLSV[sv] || '0x' + sv.toString(16)], ['Seçilen şifre takımı', cipherName(cs)]);
+        p.info += ' (' + (TLSV[sv] || '?') + ', ' + cipherName(cs) + ')';
+      } else if (ht === 11 && end - po > 16) {
+        const cl = (v[po + 12] << 16) | (v[po + 13] << 8) | v[po + 14], cs = po + 15, ce = Math.min(end, cs + cl), cns = [];
+        for (let i = cs; i + 5 < ce; i++) {
+          if (v[i] === 0x55 && v[i + 1] === 4 && v[i + 2] === 3 && (v[i + 3] === 0x0c || v[i + 3] === 0x13 || v[i + 3] === 0x16)) {
+            const n = v[i + 4]; if (n < 128 && i + 5 + n <= ce) { cns.push(ascii(v, i + 5, i + 5 + n)); i += 4 + n; }
+          }
+        }
+        if (cns.length) { tls.cert = { issuer: cns[0], subject: cns.length > 1 ? cns[1] : cns[0] }; f.push(['Sertifika sahibi', tls.cert.subject], ['Sertifikayı veren', tls.cert.issuer]); }
+      }
+    } catch (e) { /* ayrıntı okunamadı */ }
   } else if (rt === 23) p.info = 'TLS şifreli uygulama verisi (' + rl + ' bayt)';
   else p.info = 'TLS ' + RT[rt];
   p.layers.push({ name: 'TLS', fields: f });
@@ -344,7 +383,7 @@ function analyze(packets) {
       if (!p.dns.qr) A.pending.set(p.dns.id + '|' + qn + '|' + p.src, p);
       else {
         const k = p.dns.id + '|' + qn + '|' + p.dst, q = A.pending.get(k);
-        if (q) { p.dnsLatency = p.ts - q.ts; q.dnsAnswered = true; A.pending.delete(k); if (p.dnsLatency > 0.25) p.anoms.push('dns-slow'); }
+        if (q) { p.dnsLatency = p.ts - q.ts; p.dnsQNo = q.no; q.dnsRNo = p.no; q.dnsAnswered = true; A.pending.delete(k); if (p.dnsLatency > 0.25) p.anoms.push('dns-slow'); }
         if (p.dns.rcode === 3) p.anoms.push('dns-nx'); else if (p.dns.rcode) p.anoms.push('dns-error');
       }
     }
@@ -398,12 +437,16 @@ function analyze(packets) {
     if (list.length && list.length <= 5) list.forEach(f => addProblem({ sev: 'low', type: 'refused', title: 'Bağlantı reddedildi', flow: f.id, ts: f.start, pkts: f.pnos, plain: `${nm(f.server)}:${f.bPort} bağlantı isteğini reddetti (RST) – o portta dinleyen servis yok.`, advice: 'Doğru adres ve port kullandığınızdan, servisin çalıştığından emin olun.' }));
     else if (list.length) addProblem({ sev: 'low', type: 'refused', title: `${list.length} bağlantı reddedildi`, flow: null, ts: list[0].start, pkts: list.flatMap(f => f.pnos), plain: 'Birçok bağlantı isteği RST ile reddedildi.', advice: 'Hedef servislerin çalıştığını doğrulayın.' });
   }
+  const nxl = [];
   for (const p of packets) {
     if (p.anoms.includes('dns-slow')) addProblem({ sev: 'med', type: 'dnsslow', title: `Yavaş DNS yanıtı (${Math.round(p.dnsLatency * 1000)} ms)`, flow: p.flow, ts: p.ts, pkts: [p.no], plain: `"${p.dns.questions[0].name}" adının çözülmesi ${Math.round(p.dnsLatency * 1000)} ms sürdü. Her yeni bağlantı bu kadar bekler.`, advice: 'Daha hızlı bir DNS sunucusu (ör. 1.1.1.1, 8.8.8.8) denenebilir veya yerel DNS sunucusu kontrol edilebilir.' });
-    if (p.anoms.includes('dns-nx')) addProblem({ sev: 'low', type: 'dnsnx', title: 'Alan adı bulunamadı (NXDOMAIN)', flow: p.flow, ts: p.ts, pkts: [p.no], plain: `"${p.dns.questions[0].name}" diye bir alan adı yok ya da yanlış yazılmış.`, advice: 'Adresin yazımını kontrol edin. Sık tekrarlanıyorsa bir uygulama eski/hatalı bir adrese erişmeye çalışıyor olabilir.' });
+    if (p.anoms.includes('dns-nx')) nxl.push(p);
     if (p.anoms.includes('dns-error')) addProblem({ sev: 'high', type: 'dnserr', title: 'DNS sunucusu hata döndürdü', flow: p.flow, ts: p.ts, pkts: [p.no], plain: `"${p.dns.questions[0].name}" sorgusu ${RCODE[p.dns.rcode] || p.dns.rcode} ile sonuçlandı.`, advice: 'DNS sunucusunu değiştirmeyi veya sunucunun durumunu kontrol etmeyi deneyin.' });
     if (p.anoms.includes('dns-noresp')) addProblem({ sev: 'high', type: 'dnsno', title: 'DNS sorgusu yanıtsız', flow: p.flow, ts: p.ts, pkts: [p.no], plain: `"${p.dns.questions[0] ? p.dns.questions[0].name : '?'}" sorgusuna yanıt gelmedi.`, advice: 'DNS sunucusuna erişimi (güvenlik duvarı, ağ bağlantısı) kontrol edin.' });
   }
+  if (nxl.length && nxl.length <= 3) nxl.forEach(p => addProblem({ sev: 'low', type: 'dnsnx', title: 'Alan adı bulunamadı (NXDOMAIN)', flow: p.flow, ts: p.ts, pkts: [p.no], plain: `"${p.dns.questions[0].name}" diye bir alan adı yok ya da yanlış yazılmış.`, advice: 'Adresin yazımını kontrol edin. Sık tekrarlanıyorsa bir uygulama eski/hatalı bir adrese erişmeye çalışıyor olabilir.' }));
+  else if (nxl.length) addProblem({ sev: 'low', type: 'dnsnx', title: `${nxl.length} alan adı bulunamadı (NXDOMAIN)`, flow: null, ts: nxl[0].ts, pkts: nxl.map(p => p.no), plain: `${nxl.length} DNS sorgusu "böyle bir alan adı yok" yanıtı aldı (ör. "${nxl[0].dns.questions[0].name}"). Yazım hatası, eski bir adres veya rastgele ad deneyen bir uygulama olabilir.`, advice: 'Sorguyu yapan uygulamayı belirleyin; çok sayıdaysa "DGA" uyarısına da bakın.' });
+  if (API.securityHook) API.securityHook(A, addProblem);
   const order = { high: 0, med: 1, low: 2 };
   A.problems.sort((x, y) => order[x.sev] - order[y.sev] || x.ts - y.ts);
   A.problems.forEach((pr, i) => { pr.id = i + 1; if (pr.flow) fl(pr.flow).probs.push(pr); });
@@ -472,6 +515,6 @@ function describeFlow(f, A) {
   return bits.join(' ');
 }
 
-const API = { parseCapture, dissect, analyze, describePacket, describeFlow, isPrivate, flagStr, QTYPE, RCODE };
+const API = { parseCapture, dissect, analyze, describePacket, describeFlow, isPrivate, flagStr, QTYPE, RCODE, TLSV, CIPHERS, cipherName, WEAK_CIPHERS, ascii, u16, u32 };
 if (typeof module !== 'undefined' && module.exports) module.exports = API; else root.PL = API;
 })(typeof self !== 'undefined' ? self : this);

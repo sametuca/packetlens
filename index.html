@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PaketLens</title>
+<title>PackageLens</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <header class="top">
-  <div class="brand"><span class="logo" aria-hidden="true">◎</span><b>PaketLens</b><span class="tag">ağ trafiğini anlaşılır kılar</span></div>
+  <div class="brand"><span class="logo" aria-hidden="true">◎</span><b>PackageLens</b><span class="tag">ağ trafiğini anlaşılır kılar</span></div>
   <div class="top-actions">
     <div class="seg" role="group" aria-label="Mod">
       <button data-act="mode" data-v="simple" id="m-simple">Basit</button>
@@ -27,7 +27,7 @@
     <div class="drop" id="drop">
       <div class="drop-ic">⇪</div>
       <h1>Bir yakalama dosyasını buraya bırakın</h1>
-      <p>.pcap / .pcapng dosyası açın; PaketLens trafiği uygulamalara, bağlantılara ve sorunlara ayırıp düz dille anlatsın.</p>
+      <p>.pcap / .pcapng dosyası açın; PackageLens trafiği uygulamalara, bağlantılara ve sorunlara ayırıp düz dille anlatsın.</p>
       <div class="row">
         <button class="btn primary" data-act="open">Dosya seç</button>
         <button class="btn" data-act="sample">Örnek yakalamayı dene</button>
@@ -39,7 +39,7 @@
   <section id="app" hidden>
     <div class="searchbox">
       <div class="sb-row">
-        <input id="q" type="search" autocomplete="off" spellcheck="false" placeholder='Ara veya sor: "yavaş dns", "192.168.1.23 hata", "port 443", "google.com"'>
+        <input id="q" type="search" autocomplete="off" spellcheck="false" placeholder='Ara, sor ya da filtre yaz: "yavaş dns", "google.com", ip.addr == 192.168.1.23 && tcp.port == 443   ( / tuşu ile odaklan )'>
         <button class="btn ghost" data-act="clearq" id="clearq" hidden>Temizle</button>
       </div>
       <div class="sb-meta" id="qmeta"></div>
@@ -51,10 +51,14 @@
 
 <div id="drawer-bg" class="drawer-bg" hidden></div>
 <aside id="drawer" class="drawer" hidden aria-label="Ayrıntı"></aside>
+<div id="modal" hidden></div>
 <div id="toast" class="toast" hidden></div>
 
 <script src="parser.js"></script>
+<script src="filter.js"></script>
+<script src="extras.js"></script>
 <script src="sample.js" onerror="void 0"></script>
 <script src="app.js"></script>
+<script src="views.js"></script>
 </body>
 </html>

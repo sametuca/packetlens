@@ -1,10 +1,10 @@
-/* PaketLens arayüzü */
+/* PackageLens arayüzü */
 (function () {
 'use strict';
-const PL = window.PL;
+const PL = window.PL, PLF = window.PLF;
 const $ = (s, r) => (r || document).querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const S = { A: null, raw: [], pk: [], mode: 'simple', tab: 'summary', query: null, qtext: '', flowFilter: null, pktSet: null, pktSetLabel: '', vis: [], visFlows: new Set(), selPkt: null, flowSort: 'start', follow: true, srv: null, live: { running: false, since: 0, timer: null, iface: 'any', dirty: false }, appColors: new Map() };
+const S = { A: null, raw: [], pk: [], mode: 'simple', tab: 'summary', timeRange: null, visPre: [], logTab: 'dns', probCat: 'all', query: null, qtext: '', flowFilter: null, pktSet: null, pktSetLabel: '', vis: [], visFlows: new Set(), selPkt: null, flowSort: 'start', follow: true, srv: null, live: { running: false, since: 0, timer: null, iface: 'any', dirty: false }, appColors: new Map() };
 const TOKEN = new URLSearchParams(location.search).get('t');
 try { const m = localStorage.getItem('pl-mode'); if (m === 'adv' || m === 'simple') S.mode = m; } catch (e) { /* yok say */ }
 
@@ -46,6 +46,12 @@ const EXPLAIN = {
   'Sunucu adı (SNI)': 'İstemci, bağlanmak istediği site adını şifrelemeden önce açıkça söyler. İçerik şifreli olsa bile hangi siteye gidildiği buradan görülür.',
   'İşlem kimliği': 'DNS sorgusunu yanıtıyla eşleştiren numara.', 'Sonuç kodu': '0 NOERROR=başarılı, 3 NXDOMAIN=böyle bir ad yok, 2 SERVFAIL=sunucu hatası.',
   'Soru': 'DNS’e sorulan alan adı ve kayıt türü (A=IPv4, AAAA=IPv6).', 'Cevap': 'DNS’in verdiği cevap ve önbellekte tutulabileceği süre (TTL).',
+  'Önerilen sürümler': 'İstemcinin desteklediğini söylediği TLS sürümleri. Sunucu bunlardan birini seçer.',
+  'Şifre takımları': 'İstemcinin önerdiği şifreleme algoritmaları (güvenlik sırasına göre). Sunucu birini seçer.',
+  'ALPN (uygulama protokolü)': 'TLS içinde hangi protokolün konuşulacağı: h2 = HTTP/2, http/1.1 = HTTP/1.1.',
+  'Seçilen sürüm': 'Sunucunun seçtiği gerçek TLS sürümü. 1.2 ve 1.3 güvenlidir; 1.0/1.1 eskidir.',
+  'Seçilen şifre takımı': 'Bu bağlantıda kullanılacak şifreleme algoritması.',
+  'Sertifika sahibi': 'Sunucunun sertifikasında yazan alan adı (CN). SNI ile aynı olmalı.', 'Sertifikayı veren': 'Sertifikayı imzalayan kuruluş (CA).',
   'İlk satır': 'HTTP isteğinin yöntemi ve adresi ya da yanıtın durum kodu.', 'Host': 'İstek yapılan site adı.', 'İçerik türü': 'Dönen verinin türü.',
   'İlgili paket': 'ICMP hata mesajı hangi orijinal paket için gönderildi.',
   'İşlem': 'ARP isteği “bu IP kimde?”, yanıtı “bende, MAC adresim şu” demektir.',
@@ -97,7 +103,7 @@ function parseQuery(text) {
 /* ---------- veri yükleme ---------- */
 function ingest(rawList, name) {
   S.raw = rawList; S.pk = rawList.map((r, i) => PL.dissect(r, i + 1));
-  S.live.name = name || ''; S.flowFilter = null; S.pktSet = null; S.selPkt = null; S.appColors.clear();
+  S.live.name = name || ''; S.flowFilter = null; S.pktSet = null; S.selPkt = null; S.timeRange = null; S.appColors.clear();
   reanalyze(true);
   $('#empty').hidden = true; $('#app').hidden = false;
   if (S.tab === 'packets' && S.mode === 'simple') S.tab = 'summary';
@@ -114,6 +120,8 @@ function computeVisible() {
   if (S.query && S.query.test) l = l.filter(S.query.test);
   if (S.flowFilter) l = l.filter(p => p.flow === S.flowFilter);
   if (S.pktSet) l = l.filter(p => S.pktSet.has(p.no));
+  S.visPre = l;
+  if (S.timeRange) { const t0 = S.A.t0, a = S.timeRange[0], b = S.timeRange[1]; l = l.filter(p => { const x = p.ts - t0; return x >= a && x <= b; }); }
   S.vis = l; S.visFlows = new Set(l.map(p => p.flow));
 }
 function loadBuffer(buf, name) {
@@ -132,16 +140,18 @@ function loadSample() {
 function renderChrome() {
   $('#m-simple').classList.toggle('on', S.mode === 'simple'); $('#m-adv').classList.toggle('on', S.mode === 'adv');
   const A = S.A; if (!A) return;
-  const tabs = [['summary', 'Özet'], ['problems', 'Sorunlar', A.problems.length], ['flows', 'Bağlantılar', A.flows.length]];
-  if (S.mode === 'adv') tabs.push(['packets', 'Paketler', A.packets.length]);
+  const tabs = [['summary', 'Özet'], ['problems', 'Sorunlar', A.problems.length], ['flows', 'Bağlantılar', A.flows.length], ['map', 'Harita'], ['charts', 'Grafik']];
+  if (S.mode === 'adv') tabs.push(['packets', 'Paketler', A.packets.length], ['stats', 'İstatistik'], ['logs', 'Günlükler']);
   if (!tabs.some(t => t[0] === S.tab)) S.tab = 'summary';
   $('#tabs').innerHTML = tabs.map(t => `<button class="tab ${S.tab === t[0] ? 'on' : ''}" data-act="tab" data-v="${t[0]}" role="tab">${t[1]}${t[2] != null ? `<span class="badge ${t[0] === 'problems' && A.stats.high ? 'bad' : ''}">${t[2]}</span>` : ''}</button>`).join('');
   const meta = [];
   if (S.query && S.query.test) { S.query.labels.forEach(l => meta.push(`<span class="chip on">${esc(l.label)}</span>`)); meta.push(`<span>→ ${S.vis.length} paket, ${S.visFlows.size} bağlantı</span>`); }
+  if (S.query && S.query.error) meta.push(`<span class="chip err" title="Filtre ifadesi geçersiz">⚠ ${esc(S.query.error)}</span>`);
+  if (S.timeRange) meta.push(`<button class="chip on" data-act="cleartime">Zaman: ${S.timeRange[0].toFixed(2)}–${S.timeRange[1].toFixed(2)} sn ✕</button>`);
   if (S.flowFilter) meta.push(`<button class="chip on" data-act="clrflow">Bağlantı #${S.flowFilter} ✕</button>`);
   if (S.pktSet) meta.push(`<button class="chip on" data-act="clrset">${esc(S.pktSetLabel)} ✕</button>`);
   if (S.query && S.query.wire) meta.push(`<span>Wireshark filtresi:</span><span class="wire">${esc(S.query.wire)}</span><button class="btn sm ghost" data-act="copywire">Kopyala</button>`);
-  if (!meta.length) meta.push(['sorunlar', 'yavaş dns', 'tls', 'şifresiz', 'büyük'].map(x => `<button class="chip" data-act="try" data-v="${x}">${x}</button>`).join(' '));
+  if (!meta.length) meta.push(['sorunlar', 'yavaş dns', 'tls', 'şifresiz', 'tcp.port == 443', 'dns.time > 0.1'].map(x => `<button class="chip" data-act="try" data-v="${esc(x)}">${esc(x)}</button>`).join(' '));
   $('#qmeta').innerHTML = meta.join(' ');
   $('#clearq').hidden = !S.qtext;
 }
@@ -149,7 +159,8 @@ function render() {
   if (!S.A) return;
   renderChrome();
   const v = $('#view'), sc = v.scrollTop;
-  ({ summary: renderSummary, problems: renderProblems, flows: renderFlows, packets: renderPackets }[S.tab])(v);
+  const R = Object.assign({ summary: renderSummary, problems: renderProblems, flows: renderFlows, packets: renderPackets }, (window.PLApp && window.PLApp.views) || {});
+  (R[S.tab] || renderSummary)(v);
   if (S.tab !== 'packets') v.scrollTop = sc;
 }
 
@@ -182,6 +193,7 @@ function renderSummary(v) {
     <div class="kpi"><div class="v">${st.flows}</div><div class="l">bağlantı</div></div>
     <div class="kpi"><div class="v">${st.hosts}</div><div class="l">cihaz / adres</div></div>
     <div class="kpi ${st.problems ? 'bad' : 'ok'}"><div class="v">${st.problems}</div><div class="l">sorun / uyarı</div></div>
+    <div class="kpi ${A.problems.some(x => SEC.has(x.type)) ? 'bad' : 'ok'}"><div class="v">${A.problems.filter(x => SEC.has(x.type)).length}</div><div class="l">güvenlik bulgusu</div></div>
   </div>
   <div class="quick"><span class="muted">Hızlı görünümler:</span>
     <button class="chip" data-act="quick" data-v="apps">Uygulama başına trafik</button>
@@ -204,10 +216,16 @@ function probHTML(pr) {
     <div class="muted small">${(pr.ts - S.A.t0).toFixed(2)}. saniye · ${pr.pkts.length} paket${pr.flow ? ' · bağlantı #' + pr.flow : ''}</div></div>
     <div><button class="btn sm" data-act="probpk" data-v="${pr.id}">Paketleri göster</button></div></div>`;
 }
+const SEC = new Set(['scan', 'cred', 'arp', 'dnstunnel', 'dga', 'beacon', 'sweep', 'synflood', 'weaktls', 'clear']);
+const PERF = new Set(['retrans', 'zerowin', 'slowrtt', 'dnsslow']);
+const catOf = t => SEC.has(t) ? 'sec' : PERF.has(t) ? 'perf' : 'net';
 function renderProblems(v) {
   let l = S.A.problems;
-  if (S.query && S.query.test || S.flowFilter || S.pktSet) { const nos = new Set(S.vis.map(p => p.no)); l = l.filter(pr => pr.pkts.some(n => nos.has(n))); }
-  v.innerHTML = l.length ? l.map(probHTML).join('') : `<div class="empty-note">${S.A.problems.length ? 'Bu filtreyle eşleşen sorun yok.' : '✓ Bu yakalamada sorun bulunamadı.'}</div>`;
+  if (S.query && S.query.test || S.flowFilter || S.pktSet || S.timeRange) { const nos = new Set(S.vis.map(p => p.no)); l = l.filter(pr => pr.pkts.some(n => nos.has(n))); }
+  const cnt = { all: l.length, sec: 0, perf: 0, net: 0 }; l.forEach(pr => cnt[catOf(pr.type)]++);
+  const shown = S.probCat === 'all' ? l : l.filter(pr => catOf(pr.type) === S.probCat);
+  v.innerHTML = `<div class="toolbar">${[['all', 'Hepsi'], ['sec', 'Güvenlik'], ['perf', 'Performans'], ['net', 'Ağ / bağlantı']].map(([k, t]) => `<button class="chip ${S.probCat === k ? 'on' : ''}" data-act="probcat" data-v="${k}">${t} (${cnt[k]})</button>`).join('')}</div>` +
+    (shown.length ? shown.map(probHTML).join('') : `<div class="empty-note">${S.A.problems.length ? 'Bu filtreyle eşleşen sorun yok.' : '✓ Bu yakalamada sorun bulunamadı.'}</div>`);
 }
 
 /* ---------- Bağlantılar ---------- */
@@ -288,7 +306,7 @@ function renderDetail() {
   if (!p) { d.innerHTML = '<div class="empty-note">Ayrıntı için bir paket seçin.</div>'; return; }
   const f = S.A.flows[p.flow - 1];
   d.innerHTML = `<div class="plain ${p._s === 'bad' ? 'bad' : ''}"><b>Ne oluyor?</b><br>${esc(PL.describePacket(p, S.A))}</div>
-    <div class="small muted" style="margin-bottom:10px">Paket #${p.no} · ${rel(p)} sn · <a href="#" data-act="flowpk" data-v="${f.id}">bu bağlantıdaki tüm paketler</a></div>
+    <div class="small muted" style="margin-bottom:10px">Paket #${p.no} · ${rel(p)} sn · <a href="#" data-act="flowpk" data-v="${f.id}">bu bağlantıdaki tüm paketler</a> · <a href="#" data-act="vfollow" data-v="${f.id}">akışı takip et</a></div>
     ${p.layers.map((l, i) => `<details class="layer" ${i > 0 ? 'open' : ''}><summary>${esc(l.name)}</summary><div class="fields">${l.fields.map(([k, val]) => `<div class="fld"><span class="k">${esc(k)}</span><span class="vv">${esc(val)}</span>${EXPLAIN[k] ? `<button class="q" data-act="expl" title="Bu ne demek?">?</button>` : '<span></span>'}${EXPLAIN[k] ? `<div class="expl" hidden>${esc(EXPLAIN[k])}</div>` : ''}</div>`).join('')}</div></details>`).join('')}
     <details class="layer"><summary>Ham veri (hex)</summary><pre class="hex">${hexdump(p.raw)}</pre></details>`;
 }
@@ -301,10 +319,12 @@ function evtList(pkts) {
   return pkts.slice(0, 400).map(p => `<div class="evt ${p._s}"><span class="tm">${(p.ts - A.t0).toFixed(3)}s</span><span>${esc(S.mode === 'adv' ? p.info : PL.describePacket(p, A))}${S.mode === 'adv' ? ` <a href="#" data-act="gopkt" data-v="${p.no}">#${p.no}</a>` : ''}</span></div>`).join('') + (pkts.length > 400 ? `<p class="muted">… ve ${pkts.length - 400} paket daha</p>` : '');
 }
 function openFlow(id) {
-  const A = S.A, f = A.flows[id - 1], pk = f.pnos.map(n => A.packets[n - 1]);
+  const A = S.A, f = A.flows[id - 1], pk = f.pnos.map(n => A.packets[n - 1]), X = window.PLApp.extra;
   openDrawer(`<h2>${esc(nm(f.client))} ↔ ${esc(nm(f.server))}</h2><p>${esc(PL.describeFlow(f, A))}</p>
+    <div class="row" style="justify-content:flex-start;margin:10px 0"><button class="btn sm primary" data-act="vfollow" data-v="${id}">⇄ Akışı takip et</button><button class="btn sm" data-act="flowpk" data-v="${id}">${S.mode === 'adv' ? 'Paketler sekmesinde aç' : 'Gelişmiş modda paketleri aç'}</button></div>
+    ${X && X.tlsHTML ? X.tlsHTML(f) : ''}
     ${f.probs.length ? '<h3>Sorunlar</h3>' + f.probs.map(probHTML).join('') : '<p><span class="pill ok">sağlıklı</span> Bu bağlantıda sorun tespit edilmedi.</p>'}
-    <div class="row" style="justify-content:flex-start;margin:10px 0"><button class="btn sm" data-act="flowpk" data-v="${id}">${S.mode === 'adv' ? 'Paketler sekmesinde aç' : 'Gelişmiş modda paketleri aç'}</button></div>
+    ${X && X.seqSVG ? '<h3>Sıra diyagramı</h3>' + X.seqSVG(f) : ''}
     <h3>Olay akışı</h3>${evtList(pk)}`);
 }
 function openProbPk(id) {
@@ -329,19 +349,19 @@ function renderLivebar() {
   const bar = $('#livebar'), s = S.srv; if (!s || !s.capture) { bar.hidden = true; return; }
   bar.hidden = false;
   if (S.live.running) {
-    bar.innerHTML = `<span class="rec">CANLI</span><span class="muted">${esc(S.live.iface)} · <b id="livecount">${S.pk.length}</b> paket</span><button class="btn danger sm" data-act="livestop">Durdur</button><a class="btn sm" href="/api/save?t=${encodeURIComponent(TOKEN)}" download>.pcap olarak kaydet</a>`;
+    bar.innerHTML = `<span class="rec">CANLI</span><span class="muted">${esc(S.live.iface)}${S.live.filter ? ' · filtre: <span class="mono">' + esc(S.live.filter) + '</span>' : ''} · <b id="livecount">${S.pk.length}</b> paket</span><button class="btn danger sm" data-act="livestop">Durdur</button><a class="btn sm" href="/api/save?t=${encodeURIComponent(TOKEN)}" download>.pcap olarak kaydet</a>`;
   } else {
-    bar.innerHTML = `<b>Canlı yakalama</b><select id="iface"><option value="any">Tüm arayüzler</option>${s.interfaces.map(i => `<option value="${esc(i.name)}" ${s.default_iface === i.name || S.live.iface === i.name ? 'selected' : ''}>${esc(i.name)} (${esc(i.state)})</option>`).join('')}</select>
+    bar.innerHTML = `<b>Canlı yakalama</b><select id="iface"><option value="any">Tüm arayüzler</option>${s.interfaces.map(i => `<option value="${esc(i.name)}" ${s.default_iface === i.name || S.live.iface === i.name ? 'selected' : ''}>${esc(i.name)} (${esc(i.state)})</option>`).join('')}</select><input id="capf" class="capf" value="${esc(S.live.filter || '')}" placeholder="Yakalama filtresi (isteğe bağlı): host 192.168.1.5 and port 443" spellcheck="false" autocomplete="off">
       <button class="btn primary sm" data-act="livestart" ${s.root ? '' : 'disabled title="sudo ile başlatın"'}>● Yakalamayı başlat</button>
       ${S.pk.length && S.live.since ? `<a class="btn sm" href="/api/save?t=${encodeURIComponent(TOKEN)}" download>.pcap olarak kaydet</a>` : ''}
-      ${s.root ? '' : '<span class="muted small">Root değilsiniz: canlı yakalama için <span class="mono">sudo python3 paketlens.py</span></span>'}`;
+      ${s.root ? '' : '<span class="muted small">Root değilsiniz: canlı yakalama için <span class="mono">sudo python3 packagelens.py</span></span>'}`;
   }
 }
 async function liveStart() {
-  const iface = $('#iface').value;
-  const { ok, j } = await api('/api/start?iface=' + encodeURIComponent(iface), { method: 'POST' });
+  const iface = $('#iface').value, flt = ($('#capf').value || '').trim();
+  const { ok, j } = await api('/api/start?iface=' + encodeURIComponent(iface) + '&filter=' + encodeURIComponent(flt), { method: 'POST' });
   if (!ok) { toast(j.error || 'Başlatılamadı'); return; }
-  S.live.running = true; S.live.since = 0; S.live.iface = iface; S.pk = []; S.raw = []; S.selPkt = null; S.flowFilter = null; S.pktSet = null; S.appColors.clear();
+  S.live.running = true; S.live.since = 0; S.live.iface = iface; S.live.filter = flt; S.timeRange = null; S.pk = []; S.raw = []; S.selPkt = null; S.flowFilter = null; S.pktSet = null; S.appColors.clear();
   $('#empty').hidden = true; $('#app').hidden = false;
   S.A = PL.analyze([]); S.A.nm = ip => ip; S.vis = []; S.visFlows = new Set();
   if (S.mode === 'adv') S.tab = 'packets';
@@ -355,7 +375,7 @@ async function livePoll() {
     if (j.packets.length) {
       for (const [ts, len, b] of j.packets) { const r = { ts, len, data: b64u8(b), link: 1 }; S.raw.push(r); S.pk.push(PL.dissect(r, S.pk.length + 1)); }
       S.live.since += j.packets.length;
-      reanalyze(false);
+      if (S.pk.length < 20000 || Date.now() - (S.live.last || 0) > 3000) { reanalyze(false); S.live.last = Date.now(); }
       const c = $('#livecount'); if (c) c.textContent = S.pk.length.toLocaleString('tr');
       if (S.tab === 'packets' && $('#pkb')) { renderChrome(); updatePacketList(); } else render();
     }
@@ -366,8 +386,17 @@ function stopLiveUI() { S.live.running = false; clearInterval(S.live.timer); S.l
 async function liveStop() { try { await api('/api/stop', { method: 'POST' }); } catch (e) { /* yok say */ } await livePoll(); stopLiveUI(); render(); }
 
 /* ---------- olaylar ---------- */
+function buildQuery(text) {
+  const t = text.trim(); if (!t) return null;
+  if (PLF && PLF.looksLikeFilter(t)) {
+    const c = PLF.compile(t);
+    if (!c.ok) return { test: null, labels: [], wire: '', error: c.error };
+    return { test: p => c.test(p, S.A), labels: [{ label: 'Filtre: ' + (t.length > 46 ? t.slice(0, 46) + '…' : t) }], wire: '' };
+  }
+  return parseQuery(t);
+}
 function setQuery(text) {
-  S.qtext = text; S.query = text.trim() ? parseQuery(text) : null; $('#q').value = text;
+  S.qtext = text; S.query = buildQuery(text); $('#q').value = text;
   if (S.A) { computeVisible(); if (S.query && S.query.test && S.tab === 'summary') S.tab = S.mode === 'adv' ? 'packets' : 'flows'; render(); }
 }
 function setPktFilter(id) {
@@ -379,7 +408,7 @@ document.addEventListener('click', e => {
   const act = el.dataset.act, v = el.dataset.v;
   if (el.tagName === 'A') e.preventDefault();
   switch (act) {
-    case 'mode': S.mode = v; try { localStorage.setItem('pl-mode', v); } catch (x) { /* yok say */ } if (S.mode === 'simple' && S.tab === 'packets') S.tab = 'flows'; render(); renderChrome(); break;
+    case 'mode': S.mode = v; try { localStorage.setItem('pl-mode', v); } catch (x) { /* yok say */ } if (S.mode === 'simple' && ['packets', 'stats', 'logs'].includes(S.tab)) S.tab = 'flows'; render(); renderChrome(); break;
     case 'open': $('#file').click(); break;
     case 'sample': loadSample(); break;
     case 'tab': S.tab = v; render(); break;
@@ -401,12 +430,17 @@ document.addEventListener('click', e => {
       S.flowFilter = +v; S.pktSet = null; S.tab = 'packets'; S.selPkt = null; computeVisible(); closeDrawer(); render(); break;
     case 'gopkt': closeDrawer(); S.tab = 'packets'; render(); selectPacket(+v, true); break;
     case 'expl': { const x = el.parentElement.querySelector('.expl'); if (x) x.hidden = !x.hidden; break; }
+    case 'cleartime': S.timeRange = null; computeVisible(); render(); break;
+    case 'probcat': S.probCat = v; render(); break;
     case 'closedr': closeDrawer(); break;
     case 'livestart': liveStart(); break;
     case 'livestop': liveStop(); break;
   }
 });
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDrawer(); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { closeDrawer(); const m = $('#modal'); if (m) m.hidden = true; }
+  else if (e.key === '/' && !/INPUT|SELECT|TEXTAREA/.test((e.target || {}).tagName || '')) { e.preventDefault(); $('#q').focus(); }
+});
 let qt; $('#q').addEventListener('input', e => { clearTimeout(qt); qt = setTimeout(() => setQuery(e.target.value), 160); });
 let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (S.A && S.tab === 'summary') render(); }, 200); });
 $('#file').addEventListener('change', e => { if (e.target.files[0]) loadFile(e.target.files[0]); e.target.value = ''; });
@@ -416,5 +450,7 @@ document.addEventListener('drop', e => { const f = e.dataTransfer && e.dataTrans
 
 renderChrome();
 initServer();
+window.PLApp = { S, PL, PLF, $, esc, fmtB, fmtD, fmtRate, rel, nm, toast, appColor, setQuery, render, renderChrome, computeVisible, openDrawer, closeDrawer, selectPacket, pSev, evtList, views: {}, extra: {},
+  goPacket(no) { closeDrawer(); S.tab = 'packets'; render(); selectPacket(no, true); } };
 window.__PL = { S, parseQuery };
 })();
