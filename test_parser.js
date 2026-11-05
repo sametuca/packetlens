@@ -1,0 +1,14 @@
+const fs = require('fs');
+const PL = require('./parser.js');
+const b = fs.readFileSync(process.argv[2] || __dirname + '/sample.pcap');
+const buf = b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
+const raw = PL.parseCapture(buf);
+const pk = raw.map((r, i) => PL.dissect(r, i + 1));
+const A = PL.analyze(pk);
+console.log('STATS', JSON.stringify(A.stats));
+console.log('APPS', A.apps.map(a => `${a.app}:${a.pkts}`).join(' '));
+console.log('NAMES', [...A.names].map(x => x.join('=')).join(' '));
+for (const p of A.problems) console.log(`[${p.sev}] ${p.title} | flow=${p.flow} pkts=${p.pkts.length} | ${p.plain.slice(0, 90)}`);
+const unknown = pk.filter(p => p.info === 'Bozuk veya eksik paket' || p.anoms.includes('malformed'));
+console.log('MALFORMED', unknown.length);
+for (const i of [0, 2, 3, 6, 9, 80]) console.log(i + 1, pk[i].proto, pk[i].app, '|', pk[i].info, '|', PL.describePacket(pk[i], A));

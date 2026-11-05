@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PaketLens</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="logo" aria-hidden="true">◎</span><b>PaketLens</b><span class="tag">ağ trafiğini anlaşılır kılar</span></div>
+  <div class="top-actions">
+    <div class="seg" role="group" aria-label="Mod">
+      <button data-act="mode" data-v="simple" id="m-simple">Basit</button>
+      <button data-act="mode" data-v="adv" id="m-adv">Gelişmiş</button>
+    </div>
+    <button class="btn" data-act="open">Dosya aç</button>
+    <button class="btn ghost" data-act="sample">Örnek yükle</button>
+    <input type="file" id="file" accept=".pcap,.pcapng,.cap" hidden>
+  </div>
+</header>
+
+<div id="livebar" class="livebar" hidden></div>
+
+<main id="main">
+  <section id="empty" class="hero">
+    <div class="drop" id="drop">
+      <div class="drop-ic">⇪</div>
+      <h1>Bir yakalama dosyasını buraya bırakın</h1>
+      <p>.pcap / .pcapng dosyası açın; PaketLens trafiği uygulamalara, bağlantılara ve sorunlara ayırıp düz dille anlatsın.</p>
+      <div class="row">
+        <button class="btn primary" data-act="open">Dosya seç</button>
+        <button class="btn" data-act="sample">Örnek yakalamayı dene</button>
+      </div>
+      <p class="muted small" id="live-hint"></p>
+    </div>
+  </section>
+
+  <section id="app" hidden>
+    <div class="searchbox">
+      <div class="sb-row">
+        <input id="q" type="search" autocomplete="off" spellcheck="false" placeholder='Ara veya sor: "yavaş dns", "192.168.1.23 hata", "port 443", "google.com"'>
+        <button class="btn ghost" data-act="clearq" id="clearq" hidden>Temizle</button>
+      </div>
+      <div class="sb-meta" id="qmeta"></div>
+    </div>
+    <nav class="tabs" id="tabs" role="tablist"></nav>
+    <div id="view" class="view"></div>
+  </section>
+</main>
+
+<div id="drawer-bg" class="drawer-bg" hidden></div>
+<aside id="drawer" class="drawer" hidden aria-label="Ayrıntı"></aside>
+<div id="toast" class="toast" hidden></div>
+
+<script src="parser.js"></script>
+<script src="sample.js" onerror="void 0"></script>
+<script src="app.js"></script>
+</body>
+</html>
