@@ -5,8 +5,7 @@
 'use strict';
 const X = window.PLApp; if (!X) return;
 const { S, esc, toast, $ } = X;
-const TOKEN = new URLSearchParams(location.search).get('t');
-const api = (path, opt) => fetch(path + (path.includes('?') ? '&' : '?') + 't=' + encodeURIComponent(TOKEN), opt)
+const api = (path, opt) => fetch(path, opt)
   .then(r => r.json().then(j => ({ ok: r.ok, j })).catch(() => ({ ok: r.ok, j: {} })));
 
 const PT = { st: null, timer: null, busy: false, pane: 'live', reveal: false, err: '', note: '', lastCfg: null,
@@ -76,7 +75,7 @@ function paneTabs(st) {
     <input type="search" class="inp sm" id="pt-filter" placeholder="Olaylarda filtre…" value="${esc(PT.filter)}" spellcheck="false">
     <button class="btn sm" data-act="pt-watch">Yakalamada izle</button>
     <button class="btn sm ghost" data-act="pt-open-sites">Ana Siteler</button>
-    <a class="btn sm" href="/api/ptentes/report?t=${encodeURIComponent(TOKEN)}" download>Raporu indir</a></div>`;
+    <a class="btn sm" href="/api/ptentes/report" download>Raporu indir</a></div>`;
 }
 
 function eventFilter(list) {
@@ -274,7 +273,7 @@ function patchRunning(st) {
 
 function render(v) {
   const st = PT.st;
-  if (!TOKEN || location.protocol === 'file:') {
+  if (location.protocol === 'file:') {
     v.innerHTML = `<div class="card"><h2>ptentes</h2><p class="muted">Bu panel sunucu üzerinden çalışır. Programı çalıştırıp arayüzü <span class="mono">http://127.0.0.1:8765</span> adresinden açın.</p></div>`;
     return;
   }

@@ -7,9 +7,9 @@ Kullanım:
     sudo python3 packetlens.py -i eth0 --port 8765
 
 Bağımlılık yok: yalnızca Python 3 standart kütüphanesi (AF_PACKET). Wireshark/libpcap gerekmez.
-Sunucu sadece 127.0.0.1 üzerinde dinler ve rastgele bir erişim anahtarı (token) ister.
+Sunucu sadece 127.0.0.1 üzerinde dinler (localhost).
 """
-import argparse, base64, json, os, secrets, socket, struct, subprocess, sys, threading, time, webbrowser
+import argparse, base64, json, os, socket, struct, subprocess, sys, threading, time, webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 import urllib.request
@@ -151,30 +151,6 @@ class Capture:
 CAP = Capture()
 ARGS = None
 SELF_PORT = 0
-TOKEN_FILE = os.path.join(HERE, '.session_token')
-_TOKEN_CHARS = set('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_')
-
-
-def _load_or_make_token():
-    """Oturum anahtarını kalıcı dosyadan okur; yoksa/bozuksa yenisini üretip kaydeder.
-    Böylece programı yeniden başlatınca da aynı adres (ve eski sekmeler/yer imleri) çalışmaya devam eder."""
-    try:
-        t = open(TOKEN_FILE, 'r', encoding='utf-8').read().strip()
-        if 16 <= len(t) <= 64 and set(t) <= _TOKEN_CHARS:
-            return t
-    except OSError:
-        pass
-    t = secrets.token_urlsafe(16)
-    try:
-        with open(TOKEN_FILE, 'w', encoding='utf-8') as f:
-            f.write(t)
-        os.chmod(TOKEN_FILE, 0o600)
-    except OSError:
-        pass
-    return t
-
-
-TOKEN = _load_or_make_token()
 
 
 def _read(path, default=''):
@@ -295,8 +271,6 @@ class H(BaseHTTPRequestHandler):
             return self._send(403, {'error': 'host'})
         u = urlparse(self.path)
         q = parse_qs(u.query)
-        if u.path == '/' and method == 'GET' and not q.get('t'):
-            return self._redirect('/?t=%s' % TOKEN)
         if u.path in STATIC and method == 'GET':
             name, ctype = STATIC[u.path]
             p = os.path.join(HERE, name)
@@ -306,8 +280,6 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, f.read(), ctype)
         if not u.path.startswith('/api/'):
             return self._send(404, {'error': 'yok'})
-        if not secrets.compare_digest(q.get('t', [''])[0], TOKEN):
-            return self._send(401, {'error': 'token'})
         if u.path == '/api/info':
             return self._send(200, {'interfaces': interfaces(), 'root': os.geteuid() == 0, 'capture': not ARGS.no_capture,
                                     'default_iface': ARGS.iface, 'commit': LOCAL_COMMIT, 'repo': 'sametuca/packetlens', 'platform': sys.platform})
@@ -413,10 +385,10 @@ def _running_instance_url(port):
     """Aynı portta bizim sunucumuz zaten çalışıyor mu? Çalışıyorsa adresini döner,
     yoksa None (yeni sunucu başlatılabilir anlamına gelir)."""
     try:
-        with urllib.request.urlopen('http://127.0.0.1:%d/api/info?t=%s' % (port, TOKEN), timeout=1.2) as r:
+        with urllib.request.urlopen('http://127.0.0.1:%d/api/info' % port, timeout=1.2) as r:
             data = json.loads(r.read().decode('utf-8'))
         if data.get('repo') == 'sametuca/packetlens':
-            return 'http://127.0.0.1:%d/?t=%s' % (port, TOKEN)
+            return 'http://127.0.0.1:%d/' % port
     except Exception:
         pass
     return None
@@ -473,7 +445,7 @@ def main():
         print('Boş port bulunamadı (%d - %d arası denendi).' % (ARGS.port, port - 1))
         return
     SELF_PORT = srv.server_address[1]
-    url = 'http://127.0.0.1:%d/?t=%s' % (SELF_PORT, TOKEN)
+    url = 'http://127.0.0.1:%d/' % SELF_PORT
     if SELF_PORT != ARGS.port:
         print('Not: %d portu doluydu, %d kullanılıyor.' % (ARGS.port, SELF_PORT))
     print('PacketLens çalışıyor → %s' % url)

@@ -20,7 +20,7 @@ sudo python3 packetlens.py          # canlı yakalama + arayüz (tarayıcı otom
 python3 packetlens.py --no-capture  # root olmadan, sadece .pcap analizi (macOS'ta da çalışır)
 ```
 
-Tarayıcı açılmazsa terminalde yazan **`http://127.0.0.1:8765/?t=...`** adresini **tam olarak** açın (`?t=` oturum anahtarı şart). Ana sayfada anahtar yoksa sunucu sizi otomatik yönlendirir.
+Tarayıcı açılmazsa terminalde yazan **`http://127.0.0.1:8765`** adresini açın.
 
 **macOS:** komut yazmak yerine proje klasöründeki **`start.command`** dosyasına çift tıklayın — sunucuyu başlatır ve tarayıcıyı doğru adreste otomatik açar. `index.html` dosyasına doğrudan çift tıklamayın: o zaman sayfa sunucusuz (`file://`) açılır ve canlı analiz çalışmaz.
 
@@ -94,7 +94,7 @@ Başlıktaki her zaman görünür büyük **▶ Analiz et** düğmesine basın. 
 | **Pasif TLS/QUIC (`tlspassive.js`):** QUIC SNI, ECH tespiti, JA3 (MD5) + JA4, gelişmiş sertifika alanları (SAN, geçerlilik), beklenmeyen issuer / inspection CA uyarıları (içerik çözülmez). | **Passive TLS/QUIC (`tlspassive.js`):** QUIC SNI, ECH detection, JA3 (MD5) + JA4, richer cert fields (SAN, validity), unexpected issuer / inspection CA alerts (no decryption). |
 | **DoH/DoT:** bilinen DoH resolver’ları ve port 853 Siteler / Sorunlar’da. | **DoH/DoT:** known DoH resolvers and port 853 in Sites / Problems. |
 | **ptentes:** çoklu hedef (8’e kadar), oturum etiketi/not, çerezler, QUIC SNI + ECH sayacı, **Siteler** sekmesi, **Yakalamada izle**, MITM hazırlık listesi, ARP çakışma uyarısı. | **ptentes:** multi-target (up to 8), session label/note, cookies, QUIC SNI + ECH counters, **Sites** tab, **Watch in capture**, MITM readiness checklist, ARP conflict warning. |
-| **Sunucu:** cihaz kaydı API, webhook (`PACKETLENS_WEBHOOK`), `oui.json` üretici genişletme; canlı analiz bağlantı mesajları (token, macOS). | **Server:** device registry API, webhook (`PACKETLENS_WEBHOOK`), `oui.json` vendor lookup; clearer live-analysis connection messages (token, macOS). |
+| **Sunucu:** cihaz kaydı API, webhook (`PACKETLENS_WEBHOOK`), `oui.json` üretici genişletme. | **Server:** device registry API, webhook (`PACKETLENS_WEBHOOK`), `oui.json` vendor lookup. |
 | **Dışa aktarma:** Cihazlar + Mobil rapor CSV; TLS CSV’de JA3/JA4/ECH/QUIC alanları. | **Export:** Devices + mobile report CSV; TLS CSV with JA3/JA4/ECH/QUIC columns. |
 
 ## Ekran görüntüleri
@@ -109,7 +109,7 @@ Başlıktaki her zaman görünür büyük **▶ Analiz et** düğmesine basın. 
 
 ## Güvenlik notları
 
-Sunucu yalnızca `127.0.0.1` üzerinde dinler, rastgele bir erişim anahtarı ister ve `Host` başlığını doğrular (DNS-rebinding koruması).
+Sunucu yalnızca `127.0.0.1` üzerinde dinler ve `Host` başlığını doğrular (DNS-rebinding koruması).
 Canlı yakalama root gerektirir. **Yalnızca izleme yetkiniz olan ağlarda kullanın.** Anonimleştirilmiş çıktı adresleri maskeler ama gizlilik garantisi değildir; paylaşmadan önce gözden geçirin.
 
 ## Proje yapısı

@@ -5,12 +5,6 @@ const PL = window.PL, PLF = window.PLF;
 const $ = (s, r) => (r || document).querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const S = { A: null, raw: [], pk: [], mode: 'simple', tab: 'summary', timeRange: null, visPre: [], logTab: 'dns', probCat: 'all', query: null, qtext: '', flowFilter: null, pktSet: null, pktSetLabel: '', vis: [], visFlows: new Set(), selPkt: null, flowSort: 'start', follow: true, srv: null, live: { running: false, since: 0, timer: null, iface: 'any', dirty: false }, appColors: new Map() };
-function authToken() {
-  const q = new URLSearchParams(location.search).get('t');
-  if (q) return q;
-  try { return sessionStorage.getItem('pl-token') || ''; } catch (e) { return ''; }
-}
-const TOKEN = authToken();
 let srvInit = 'pending';
 const DEFAULTS = { lang: 'tr', theme: 'auto', density: 'normal', timefmt: 'rel', names: true,
   dnsSlow: 250, rttSlow: 150, retransMed: 3, scanTargets: 15, tunnelSubs: 15, dgaNames: 20, sweepHosts: 15, off: [],
@@ -384,20 +378,17 @@ function openProbPk(id) {
 }
 
 /* ---------- Canlı yakalama ---------- */
-const api = (path, opt) => fetch(path + (path.includes('?') ? '&' : '?') + 't=' + encodeURIComponent(authToken()), opt).then(r => r.json().then(j => ({ ok: r.ok, j })));
+const api = (path, opt) => fetch(path, opt).then(r => r.json().then(j => ({ ok: r.ok, j })).catch(() => ({ ok: r.ok, j: {} })));
 function b64u8(s) { const b = atob(s), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
 function maskBits(m) { return String(m).split('.').reduce((n, o) => n + (+o).toString(2).replace(/0/g, '').length, 0); }
 async function loadNet() { try { const { ok, j } = await api('/api/net'); if (ok) S.net = j; } catch (e) { /* yok say */ } }
 async function initServer() {
   if (location.protocol === 'file:') { srvInit = 'file'; return; }
-  const tok = authToken();
-  if (!tok) { srvInit = 'notoken'; return; }
   srvInit = 'loading';
   try {
     const { ok, j } = await api('/api/info');
     if (!ok) { srvInit = 'fail'; S.srv = null; renderLivebar(); return; }
     S.srv = j;
-    try { sessionStorage.setItem('pl-token', tok); } catch (e) { /* yok say */ }
     srvInit = 'ok';
     await loadNet(); if (PL.loadOui) PL.loadOui(); renderLivebar();
     const hint = $('#live-hint');
@@ -420,14 +411,13 @@ function renderLivebar() {
   bar.hidden = false;
   const cmd = '<span class="mono">sudo python3 packetlens.py</span>';
   if (S.live.running) {
-    bar.innerHTML = `<span class="rec">CANLI</span><span class="muted">${esc(S.live.iface)}${S.live.filter ? ' · filtre: <span class="mono">' + esc(S.live.filter) + '</span>' : ''} · <b id="livecount">${S.pk.length}</b> paket</span><button class="btn danger sm" data-act="livestop">Durdur</button><a class="btn sm" href="/api/save?t=${encodeURIComponent(TOKEN)}" download>.pcap olarak kaydet</a>`;
+    bar.innerHTML = `<span class="rec">CANLI</span><span class="muted">${esc(S.live.iface)}${S.live.filter ? ' · filtre: <span class="mono">' + esc(S.live.filter) + '</span>' : ''} · <b id="livecount">${S.pk.length}</b> paket</span><button class="btn danger sm" data-act="livestop">Durdur</button><a class="btn sm" href="/api/save" download>.pcap olarak kaydet</a>`;
   } else if (!s) {
     let msg;
-    if (srvInit === 'file') msg = 'Sayfa dosyadan (file://) açılmış. Terminalde sunucuyu başlatın ve yazdırılan <span class="mono">http://127.0.0.1:…/?t=…</span> adresini açın.';
-    else if (srvInit === 'notoken') msg = 'Oturum anahtarı (?t=…) yok. Terminaldeki tam adresi kullanın (ör. <span class="mono">http://127.0.0.1:8765/?t=…</span>) veya sunucuyu yeniden başlatıp açılan sekmeyi kullanın.';
+    if (srvInit === 'file') msg = 'Sayfa dosyadan (file://) açılmış. Terminalde <span class="mono">python3 packetlens.py</span> çalıştırıp <span class="mono">http://127.0.0.1:8765</span> adresini açın.';
     else if (srvInit === 'loading') msg = 'Sunucuya bağlanılıyor…';
-    else if (srvInit === 'fail') msg = 'Sunucu yanıt vermedi (yanlış port, eski sekme veya token). Terminaldeki güncel linki açın: <span class="mono">http://127.0.0.1:8765/?t=…</span>';
-    else msg = `Sunucu bilinmiyor. Program çalışıyorsa terminaldeki tam URL’yi açın; değilse: ${cmd}`;
+    else if (srvInit === 'fail') msg = 'Sunucu yanıt vermedi. Programın çalıştığından emin olun ve <span class="mono">http://127.0.0.1:8765</span> (veya terminalde yazan port) adresini açın.';
+    else msg = `Sunucu bilinmiyor. Program çalışmıyorsa: ${cmd}`;
     bar.innerHTML = `<b>Canlı analiz</b><span class="muted">${msg}</span><button class="btn sm ghost" data-act="analyze">Kapat ✕</button>`;
   } else if (!s.capture) {
     const plat = (s.platform && !s.platform.startsWith('linux')) ? ' Bu ortamda (macOS/Windows) yalnızca .pcap dosyası analizi desteklenir; canlı yakalama için Linux gerekir.' : '';
@@ -442,7 +432,7 @@ function renderLivebar() {
     const gw = S.net && S.net.gateway && S.net.gateway.ip ? `<span class="muted small">${T('Ağ geçidi')}: <span class="mono">${esc(S.net.gateway.ip)}</span>${S.net.dns && S.net.dns.length ? ' · DNS: <span class="mono">' + esc(S.net.dns.slice(0, 2).join(', ')) + '</span>' : ''}</span>` : '';
     bar.innerHTML = `<div class="ifgrid" role="listbox" aria-label="${T('Ağ adaptörü')}">${cards}</div><input type="hidden" id="iface" value="${esc(ifc)}">${gw}<b class="sr"></b><input id="capf" class="capf" value="${esc(S.live.filter != null && S.live.since ? S.live.filter : (S.live.filter || st.capfilter || ''))}" placeholder="Yakalama filtresi (isteğe bağlı): host 192.168.1.5 and port 443" spellcheck="false" autocomplete="off">
       <button class="btn primary" data-act="livestart" ${s.root ? '' : 'disabled title="sudo ile başlatın"'}>▶ Analizi başlat</button>
-      ${S.pk.length && S.live.since ? `<a class="btn sm" href="/api/save?t=${encodeURIComponent(TOKEN)}" download>.pcap olarak kaydet</a>` : ''}
+      ${S.pk.length && S.live.since ? `<a class="btn sm" href="/api/save" download>.pcap olarak kaydet</a>` : ''}
       <span class="muted small">${opts} · <a href="#" data-act="settings">değiştir</a></span>
       ${s.root ? '' : `<span class="muted small">Root değilsiniz: canlı analiz için ${cmd}</span>`}
       <button class="btn sm ghost" data-act="analyze" title="Kapat">✕</button>`;

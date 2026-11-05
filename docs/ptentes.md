@@ -55,7 +55,7 @@ Durdurduğunuzda motor doğru ARP eşlemelerini geri gönderir ve
 
 ## Erişim ve güvenlik
 
-Sunucu yalnızca `127.0.0.1` üzerinde dinler ve rastgele bir token ister.
+Sunucu yalnızca `127.0.0.1` üzerinde dinler.
 ptentes yalnızca yerel alt ağdaki bir hedefi kabul eder (internet üzerinden
 rastgele hedef verilemez). Yalnızca sahibi olduğunuz veya yazılı izinle
 test yaptığınız ağlarda kullanın.
@@ -73,4 +73,4 @@ test yaptığınız ağlarda kullanın.
 | `/api/ptentes/discover` | POST | `{iface}` |
 | `/api/ptentes/report` | GET | JSON indirme |
 
-Tüm çağrılar `?t=<token>` ister.
+API çağrıları aynı origin üzerinden yapılır (localhost).

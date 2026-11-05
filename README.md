@@ -20,7 +20,7 @@ sudo python3 packetlens.py          # live capture + GUI (opens in your browser)
 python3 packetlens.py --no-capture  # no root: analyze .pcap files only (works on macOS too)
 ```
 
-If the browser does not open, use the full **`http://127.0.0.1:8765/?t=...`** URL from the terminal (the `?t=` session token is required). If the token is missing, the server redirects automatically.
+If the browser does not open, go to **`http://127.0.0.1:8765`** (or the port shown in the terminal).
 
 **macOS:** double-click **`start.command`** in the project folder instead of typing commands — it starts the server and opens your browser at the right URL automatically. Do not double-click `index.html` directly: that opens the page without a server (`file://`) and live analysis will not work.
 
@@ -94,7 +94,7 @@ The **Devices** tab lists every machine on the local network: IP, MAC, vendor (f
 | **Passive TLS/QUIC (`tlspassive.js`):** QUIC SNI, ECH detection, JA3 (MD5) + JA4, cert SAN/validity, inspection CA / issuer mismatch (no decryption). | **Pasif TLS/QUIC:** QUIC SNI, ECH, JA3/JA4, sertifika alanları, issuer anomalisi (içerik yok). |
 | **DoH/DoT** in Sites and Problems. | **DoH/DoT** Siteler ve Sorunlar’da. |
 | **ptentes:** multi-target, session label/note, cookies, QUIC/ECH KPIs, Sites tab, watch in capture, MITM checklist. | **ptentes:** çoklu hedef, etiket/not, çerezler, QUIC/ECH, Siteler, yakalamada izle, hazırlık listesi. |
-| **Server:** device registry API, webhook, `oui.json`; token redirect and clearer connection errors. | **Sunucu:** cihaz API, webhook, `oui.json`; token yönlendirme ve bağlantı mesajları. |
+| **Server:** device registry API, webhook, `oui.json`. | **Sunucu:** cihaz API, webhook, `oui.json`. |
 | **Export:** Devices + mobile CSV; TLS CSV with JA3/JA4/ECH/QUIC. | **Dışa aktarma:** Cihazlar + mobil rapor; geniş TLS CSV. |
 
 ## Screenshots
@@ -109,7 +109,7 @@ The **Devices** tab lists every machine on the local network: IP, MAC, vendor (f
 
 ## Security notes
 
-The server listens on `127.0.0.1` only, requires a random access token and validates the `Host` header (DNS-rebinding protection).
+The server listens on `127.0.0.1` only and validates the `Host` header (DNS-rebinding protection).
 Live capture needs root. **Use it only on networks you are authorized to monitor.** Anonymized exports mask addresses but are not a guarantee of privacy; review them before sharing.
 
 ## Project layout
