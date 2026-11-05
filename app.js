@@ -5,7 +5,7 @@ const PL = window.PL, PLF = window.PLF;
 const $ = (s, r) => (r || document).querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const S = { A: null, raw: [], pk: [], mode: 'simple', tab: 'summary', timeRange: null, visPre: [], logTab: 'dns', probCat: 'all', query: null, qtext: '', flowFilter: null, pktSet: null, pktSetLabel: '', vis: [], visFlows: new Set(), selPkt: null, flowSort: 'start', follow: true, srv: null, live: { running: false, since: 0, timer: null, iface: 'any', dirty: false }, appColors: new Map() };
-let srvInit = 'pending';
+let srvInit = 'pending', srvInitDetail = '';
 const DEFAULTS = { lang: 'tr', theme: 'auto', density: 'normal', timefmt: 'rel', names: true,
   dnsSlow: 250, rttSlow: 150, retransMed: 3, scanTargets: 15, tunnelSubs: 15, dgaNames: 20, sweepHosts: 15, off: [],
   iface: '', capfilter: '', snap: 1600, max: 300000, duration: 0, promisc: true, follow: true, presets: [] };
@@ -382,12 +382,30 @@ const api = (path, opt) => fetch(path, opt).then(r => r.json().then(j => ({ ok: 
 function b64u8(s) { const b = atob(s), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
 function maskBits(m) { return String(m).split('.').reduce((n, o) => n + (+o).toString(2).replace(/0/g, '').length, 0); }
 async function loadNet() { try { const { ok, j } = await api('/api/net'); if (ok) S.net = j; } catch (e) { /* yok say */ } }
+function liveConnectHint() {
+  const h = location.hostname;
+  if (h && h !== '127.0.0.1' && h !== 'localhost' && h !== '[::1]' && h !== '::1') {
+    return ' Sunucu yalnızca <span class="mono">127.0.0.1</span> üzerinde dinler — sayfayı <b>Kali VM içindeki</b> tarayıcıda, terminalde yazan adresle açın (Mac/Windows’taki 127.0.0.1 sanal makineye gitmez).';
+  }
+  return '';
+}
 async function initServer() {
   if (location.protocol === 'file:') { srvInit = 'file'; return; }
   srvInit = 'loading';
+  srvInitDetail = '';
   try {
-    const { ok, j } = await api('/api/info');
-    if (!ok) { srvInit = 'fail'; S.srv = null; renderLivebar(); return; }
+    const r = await fetch('/api/info');
+    let j = {};
+    try { j = await r.json(); } catch (e) { /* boş gövde */ }
+    if (!r.ok) {
+      srvInit = 'fail';
+      S.srv = null;
+      if (r.status === 401) srvInitDetail = 'stale';
+      else if (r.status === 403) srvInitDetail = 'host';
+      else srvInitDetail = 'http';
+      renderLivebar();
+      return;
+    }
     S.srv = j;
     srvInit = 'ok';
     await loadNet(); if (PL.loadOui) PL.loadOui(); renderLivebar();
@@ -397,7 +415,12 @@ async function initServer() {
       else hint.textContent = j.root ? 'Canlı analiz hazır: “▶ Analiz et” düğmesine basın.' : 'Canlı analiz için programı sudo ile başlatın (şu an root değil).';
     }
     if (window.PLApp && window.PLApp.checkUpdate) window.PLApp.checkUpdate(j.commit);
-  } catch (e) { srvInit = 'fail'; S.srv = null; renderLivebar(); }
+  } catch (e) {
+    srvInit = 'fail';
+    S.srv = null;
+    srvInitDetail = 'network';
+    renderLivebar();
+  }
 }
 function sysPlatformHint(j) {
   if (j && j.platform && !j.platform.startsWith('linux')) return 'macOS/Windows: canlı paket yakalama yok; pcap yükleyin veya Linux’ta sudo ile çalıştırın.';
@@ -414,10 +437,12 @@ function renderLivebar() {
     bar.innerHTML = `<span class="rec">CANLI</span><span class="muted">${esc(S.live.iface)}${S.live.filter ? ' · filtre: <span class="mono">' + esc(S.live.filter) + '</span>' : ''} · <b id="livecount">${S.pk.length}</b> paket</span><button class="btn danger sm" data-act="livestop">Durdur</button><a class="btn sm" href="/api/save" download>.pcap olarak kaydet</a>`;
   } else if (!s) {
     let msg;
-    if (srvInit === 'file') msg = 'Sayfa dosyadan (file://) açılmış. Terminalde <span class="mono">python3 packetlens.py</span> çalıştırıp <span class="mono">http://127.0.0.1:8765</span> adresini açın.';
+    if (srvInit === 'file') msg = 'Sayfa dosyadan (file://) açılmış. Kali terminalinde <span class="mono">sudo python3 packetlens.py</span> çalıştırıp terminalde yazan <span class="mono">http://127.0.0.1:…</span> adresini açın.';
     else if (srvInit === 'loading') msg = 'Sunucuya bağlanılıyor…';
-    else if (srvInit === 'fail') msg = 'Sunucu yanıt vermedi. Programın çalıştığından emin olun ve <span class="mono">http://127.0.0.1:8765</span> (veya terminalde yazan port) adresini açın.';
-    else msg = `Sunucu bilinmiyor. Program çalışmıyorsa: ${cmd}`;
+    else if (srvInit === 'fail' && srvInitDetail === 'stale') msg = 'Portta <b>eski</b> PacketLens çalışıyor (token istiyor). Kali’de: <span class="mono">pkill -f packetlens.py</span> → <span class="mono">sudo python3 packetlens.py</span> → sayfayı <b>Ctrl+Shift+R</b> ile yenileyin.';
+    else if (srvInit === 'fail' && srvInitDetail === 'host') msg = 'Host reddedildi. Adres çubuğu <span class="mono">http://127.0.0.1:' + (location.port || '8765') + '</span> olmalı.';
+    else if (srvInit === 'fail') msg = 'Sunucu yanıt vermedi. Kali’de program çalışıyor mu? Terminaldeki tam URL’yi açın (port 8766 olabilir).' + liveConnectHint();
+    else msg = `Sunucu bilinmiyor. Kali terminalinde: ${cmd}`;
     bar.innerHTML = `<b>Canlı analiz</b><span class="muted">${msg}</span><button class="btn sm ghost" data-act="analyze">Kapat ✕</button>`;
   } else if (!s.capture) {
     const plat = (s.platform && !s.platform.startsWith('linux')) ? ' Bu ortamda (macOS/Windows) yalnızca .pcap dosyası analizi desteklenir; canlı yakalama için Linux gerekir.' : '';

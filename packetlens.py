@@ -12,6 +12,7 @@ Sunucu sadece 127.0.0.1 üzerinde dinler (localhost).
 import argparse, base64, json, os, socket, struct, subprocess, sys, threading, time, webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
+import urllib.error
 import urllib.request
 
 from capfilter import compile_filter, FilterError
@@ -253,9 +254,17 @@ class H(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _host_ok(self):
-        # DNS rebinding koruması: yalnızca localhost / 127.0.0.1 Host başlıklarını kabul et
-        host = (self.headers.get('Host') or '').rsplit(':', 1)[0]
-        return host in ('127.0.0.1', 'localhost')
+        # DNS rebinding koruması: yalnızca localhost Host başlıklarını kabul et
+        raw = (self.headers.get('Host') or '').strip().lower()
+        if not raw:
+            return False
+        if raw.startswith('['):
+            host = raw.split(']', 1)[0][1:]
+        elif raw.count(':') == 1 and raw.rsplit(':', 1)[1].isdigit():
+            host = raw.rsplit(':', 1)[0]
+        else:
+            host = raw
+        return host in ('127.0.0.1', 'localhost', '::1')
 
     def _json(self):
         try:
@@ -381,16 +390,30 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self): self._handle('POST')
 
 
-def _running_instance_url(port):
-    """Aynı portta bizim sunucumuz zaten çalışıyor mu? Çalışıyorsa adresini döner,
-    yoksa None (yeni sunucu başlatılabilir anlamına gelir)."""
+def _probe_api(port):
+    """Porttaki /api/info durumu: ok | stale_token | busy | closed."""
     try:
         with urllib.request.urlopen('http://127.0.0.1:%d/api/info' % port, timeout=1.2) as r:
             data = json.loads(r.read().decode('utf-8'))
         if data.get('repo') == 'sametuca/packetlens':
-            return 'http://127.0.0.1:%d/' % port
+            return 'ok', data
+        return 'busy', None
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            return 'stale_token', None
+        return 'busy', None
     except Exception:
-        pass
+        return 'closed', None
+
+
+def _running_instance_url(port):
+    """Aynı portta güncel sunucumuz zaten çalışıyor mu? Çalışıyorsa adresini döner."""
+    st, _ = _probe_api(port)
+    if st == 'ok':
+        return 'http://127.0.0.1:%d/' % port
+    if st == 'stale_token':
+        print('Uyarı: %d portunda eski PacketLens (token’lı sürüm) çalışıyor.' % port)
+        print('  Durdurun: pkill -f packetlens.py   ardından yeniden: sudo python3 packetlens.py')
     return None
 
 
@@ -440,6 +463,11 @@ def main():
             srv = ThreadingHTTPServer(('127.0.0.1', port), H)
             break
         except OSError:
+            if port == ARGS.port:
+                st, _ = _probe_api(port)
+                if st == 'stale_token':
+                    print('Hata: %d dolu — eski sunucuyu kapatmadan yeni sürüm başlamaz.' % port)
+                    return
             port += 1
     if srv is None:
         print('Boş port bulunamadı (%d - %d arası denendi).' % (ARGS.port, port - 1))
