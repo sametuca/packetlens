@@ -1,77 +1,93 @@
 # PackageLens
 
-Wireshark tarzı ama daha kolay: paketleri uygulamalara, bağlantılara ve **sorunlara** ayırır, düz Türkçe ile anlatır.
-Kali Linux için hazırlandı; **bağımlılık yok** (sadece Python 3). Wireshark, tshark veya libpcap gerekmez.
+**English** · [Türkçe](README.tr.md)
 
-## Çalıştırma
+A Wireshark-style packet analyzer that is much easier to use. PackageLens groups traffic into applications, connections and **problems**, and explains them in plain language.
+Built for Kali Linux with **zero dependencies** (Python 3 only). No Wireshark, tshark or libpcap needed.
+
+![Overview](docs/01-overview.png)
+
+> The interface is currently in Turkish. English UI strings are planned.
+
+## Quick start
 
 ```bash
+git clone https://github.com/sametuca/packagelens.git
 cd packagelens
-sudo python3 packagelens.py          # canlı yakalama + arayüz (tarayıcı otomatik açılır)
-python3 packagelens.py --no-capture  # root olmadan, sadece .pcap dosyası analizi (macOS'ta da çalışır)
+sudo python3 packagelens.py          # live capture + GUI (opens in your browser)
+python3 packagelens.py --no-capture  # no root: analyze .pcap files only (works on macOS too)
 ```
 
-Tarayıcı açılmazsa terminalde yazan `http://127.0.0.1:8765/?t=...` adresini açın.
-Seçenekler: `-i eth0` (varsayılan arayüz), `--port 9000`, `--no-browser`.
-Canlı yakalama olmadan sadece `index.html` dosyasını tarayıcıda açıp `.pcap` yüklemek de mümkündür.
+If the browser does not open, use the `http://127.0.0.1:8765/?t=...` address printed in the terminal.
+Options: `-i eth0` (interface), `--port 9000`, `--no-browser`.
+You can also open `index.html` directly and load a `.pcap` / `.pcapng` file without the server.
+Click **"Örnek yükle"** (load sample) to try the app with a built-in capture.
 
-## Özellikler
+## Features
 
-**Kolay kullanım**
-- **Basit / Gelişmiş mod** (sağ üst): Basit modda Özet, Sorunlar, Bağlantılar, Harita, Grafik; Gelişmiş modda ayrıca Paketler, İstatistik, Günlükler.
-- **Doğal dil arama:** `yavaş dns`, `192.168.1.23 hata`, `port 443`, `google.com`, `şifresiz`. Altında Wireshark karşılığı gösterilir. `/` tuşu aramaya odaklanır.
-- Her sorun için nedeni ve "ne yapmalı?" önerisi; her paket için düz dille "ne oluyor?" açıklaması; alan başına (?) açıklamaları.
-- IP adresleri DNS yanıtlarından ve TLS SNI / HTTP Host bilgisinden isme çevrilir.
+**Easy to use**
+- **Simple / Advanced mode:** Simple shows Overview, Problems, Connections, Map and Chart; Advanced adds Packets, Statistics and Logs.
+- **Natural-language search:** queries like `slow dns`, `192.168.1.23 error`, `port 443`, `google.com`. The equivalent Wireshark filter is shown below the box. Press `/` to focus search.
+- Every problem comes with a cause and a "what to do" hint; every packet has a plain-language explanation.
+- IPs are resolved to names from DNS answers, TLS SNI and HTTP Host headers.
 
-**Wireshark çekirdeği**
-- **Display filter dili:** `ip.addr == 192.168.1.0/24 && tcp.port == 443`, `dns.qry.name contains "google"`, `tcp.analysis.retransmission`, `!(…)`, `matches`, parantez. Hatalarda Türkçe açıklama ve benzer alan önerisi. (`ip`, `tcp`, `udp`, `dns`, `http`, `tls`, `arp`, `icmp`, `frame`, `eth`, `pl` alanları)
-- **BPF yakalama filtresi** (canlı yakalamada): `host 192.168.1.5 and port 443`, `not port 22`, `tcp or udp`, `net 10.0.0.0/8`, `portrange 20-25`, `less/greater N`.
-- **TCP/UDP akışını takip et** (istemci mavi, sunucu kırmızı; ASCII/Hex; kopyala/indir; kayıp veri işaretlenir).
-- **Grafik:** bayt/sn, paket/sn, sorun, yeniden iletim; uygulamaya göre renkli; **sürükleyerek zaman aralığı seçimi** tüm sekmeleri filtreler.
-- **İstatistik:** protokol hiyerarşisi, paket boyutu dağılımı, konuşmalar, cihazlar, TCP el sıkışma süreleri, DNS ve HTTP özetleri.
-- **Günlükler:** DNS (süre, sonuç), HTTP (istek/yanıt eşleşmeli), TLS (sürüm, şifre, ALPN, sertifika), şifresiz oturumlar.
-- Paket listesi, katman ağacı, hex görünümü, `.pcap` / `.pcapng` okuma ve `.pcap` kaydetme.
+**Wireshark core**
+- **Display filter language:** `ip.addr == 192.168.1.0/24 && tcp.port == 443`, `dns.qry.name contains "google"`, `tcp.analysis.retransmission`, `!`, `matches`, parentheses. Errors are explained with similar-field suggestions.
+- **BPF capture filter** (live capture): `host 192.168.1.5 and port 443`, `not port 22`, `tcp or udp`, `net 10.0.0.0/8`, `portrange 20-25`, `less/greater N`.
+- **Follow TCP/UDP stream** (client in blue, server in red; ASCII/Hex; copy/download).
+- **Charts** (bytes/s, packets/s, problems, retransmissions) colored by app; **drag to select a time range** and every tab filters to it.
+- **Statistics:** protocol hierarchy, packet sizes, conversations, hosts, TCP handshake times, DNS and HTTP summaries.
+- **Logs:** DNS, HTTP (request/response matched), TLS (version, cipher, ALPN, certificate), cleartext sessions.
+- Packet list, layer tree, hex view, `.pcap` / `.pcapng` reading and `.pcap` saving.
 
-**Görselleştirme**
-- **Ağ haritası:** cihazlar arası konuşmalar (daire boyutu = veri, kırmızı = sorunlu); cihaza tıklayınca o cihaza odaklanır.
-- **Sıra diyagramı** (bağlantı ayrıntısında) ve **TLS ayrıntı paneli**.
+**Visualization**
+- **Network map:** who talks to whom (circle size = data, red = problems); click a host to focus on it.
+- **Sequence diagram** per connection and a **TLS detail panel**.
 
-**Güvenlik (Kali)**
-- Şifresiz kimlik bilgisi: HTTP Basic/form, FTP, POP3, IMAP, SMTP AUTH, Telnet. **Parolalar maskelenir**, tam parola saklanmaz.
-- ARP sahteciliği, DNS tünelleme, DGA benzeri NXDOMAIN yağmuru, beacon (düzenli aralıklı bağlantı), port/ping taraması, SYN seli, zayıf/eski TLS, şifresiz protokol kullanımı.
-- TTL ve TCP ayarlarından işletim sistemi tahmini (kesin değildir).
-- Sorunlar **Güvenlik / Performans / Ağ** olarak ayrı listelenir.
+**Security (Kali)**
+- Cleartext credentials: HTTP Basic/form, FTP, POP3, IMAP, SMTP AUTH, Telnet. **Passwords are masked**; full passwords are never stored.
+- ARP spoofing, DNS tunneling, DGA-like NXDOMAIN bursts, beaconing, port/ping scans, SYN flood, weak/old TLS, cleartext protocol use.
+- OS guess from TTL and TCP options (heuristic only).
+- Problems are split into **Security / Performance / Network**.
 
-## Güvenlik notları
+## Screenshots
 
-Sunucu yalnızca `127.0.0.1` üzerinde dinler, rastgele bir erişim anahtarı (token) ister ve `Host` başlığını doğrular
-(DNS rebinding koruması). Yakalama root ile çalışır; **yalnızca yetkili olduğunuz ağlarda** kullanın.
-
-## Dosyalar
-
-| Dosya | Görev |
+| | |
 |---|---|
-| `packagelens.py` | Yerel sunucu + canlı yakalama (AF_PACKET) |
-| `capfilter.py` | BPF yakalama filtresi (host/net/port/proto, and/or/not) |
-| `parser.js` | pcap/pcapng okuma, protokol çözme, akış ve sorun analizi |
-| `filter.js` | Wireshark tarzı display filter dili |
-| `extras.js` | Akış takibi, günlükler, istatistikler, güvenlik tespitleri |
-| `app.js`, `views.js`, `index.html`, `style.css` | Arayüz |
-| `gen_sample.py` | `sample.pcap` / `sample.js` üretir (örnek senaryolar) |
+| ![Problems](docs/02-problems.png)<br>Problems, grouped by category | ![Map](docs/03-map.png)<br>Network map |
+| ![Timeline](docs/04-timeline.png)<br>Traffic chart with drag-to-select | ![Follow stream](docs/05-follow-stream.png)<br>Follow stream (cleartext FTP) |
+| ![Statistics](docs/06-statistics.png)<br>Statistics | ![Display filter](docs/07-display-filter.png)<br>Display filter |
 
-## Testler
+## Security notes
+
+The server listens on `127.0.0.1` only, requires a random access token and validates the `Host` header (DNS-rebinding protection).
+Live capture needs root. **Use it only on networks you are authorized to monitor.**
+
+## Project layout
+
+| File | Purpose |
+|---|---|
+| `packagelens.py` | Local server + live capture (AF_PACKET) |
+| `capfilter.py` | BPF capture filter (host/net/port/proto, and/or/not) |
+| `parser.js` | pcap/pcapng reader, protocol dissection, flow and problem analysis |
+| `filter.js` | Wireshark-style display filter language |
+| `extras.js` | Stream following, logs, statistics, security detections |
+| `app.js`, `views.js`, `index.html`, `style.css` | User interface |
+| `gen_sample.py` | Generates `sample.pcap` / `sample.js` (demo scenarios) |
+
+## Tests
 
 ```bash
-python3 gen_sample.py        # örnek yakalamayı yeniden üretir
-node test_parser.js          # çözümleyici
-node test_filter.js          # display filter (36 test)
-python3 test_capfilter.py    # BPF filtresi (JS motoruyla çapraz doğrulama)
+python3 gen_sample.py        # regenerate the sample capture
+node test_parser.js          # dissector
+node test_filter.js          # display filter
+python3 test_capfilter.py    # BPF filter (cross-checked against the JS engine)
 ```
 
-## Bilinen sınırlar
+## Known limitations
 
-- Şifreli (TLS/QUIC) içerik çözülmez; kim kiminle konuşuyor, hangi siteye (SNI), ne kadar ve hangi sorunlarla görülür.
-- TLS 1.3'te sertifika şifreli olduğundan sertifika bilgisi yalnızca TLS 1.2 ve öncesinde görünür.
-- Canlı yakalama paket başına ilk 1600 bayt ve en fazla 300 bin paket saklar (bellek koruması).
-- Yakalama filtresi tcpdump/BPF sözdiziminin yaygın alt kümesidir (alan adı çözümleme ve `ether`, `vlan` gibi ifadeler yok).
-- Canlı yakalama yalnızca Linux'ta çalışır.
+- Encrypted content (TLS/QUIC) is not decrypted; you still see who talks to whom, which site (SNI), how much, and with what problems.
+- With TLS 1.3 the certificate is encrypted, so certificate details only appear for TLS 1.2 and earlier.
+- Live capture keeps the first 1600 bytes per packet and at most 300k packets (memory guard).
+- The capture filter is a common subset of tcpdump/BPF syntax (no hostname resolution, no `ether`/`vlan`).
+- Live capture works on Linux only.
