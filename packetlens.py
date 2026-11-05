@@ -9,7 +9,7 @@ Kullanım:
 Bağımlılık yok: yalnızca Python 3 standart kütüphanesi (AF_PACKET). Wireshark/libpcap gerekmez.
 Sunucu sadece 127.0.0.1 üzerinde dinler (localhost).
 """
-import argparse, base64, json, os, socket, struct, subprocess, sys, threading, time, webbrowser
+import argparse, base64, json, os, signal, socket, struct, subprocess, sys, threading, time, webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 import urllib.error
@@ -416,6 +416,29 @@ def _probe_api(port):
         return 'closed', None
 
 
+def stop_running_packetlens():
+    """Arka planda kalan packetlens.py süreçlerini sonlandır (kendi PID hariç)."""
+    me = os.getpid()
+    try:
+        r = subprocess.run(['pgrep', '-f', 'packetlens.py'], capture_output=True, text=True, timeout=5)
+        if r.returncode != 0:
+            return
+        for line in r.stdout.splitlines():
+            line = line.strip()
+            if not line.isdigit():
+                continue
+            pid = int(line)
+            if pid == me:
+                continue
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+        time.sleep(0.8)
+    except Exception:
+        pass
+
+
 def _running_instance_url(port):
     """Aynı portta güncel sunucumuz zaten çalışıyor mu? Çalışıyorsa adresini döner."""
     st, _ = _probe_api(port)
@@ -423,7 +446,7 @@ def _running_instance_url(port):
         return 'http://127.0.0.1:%d/' % port
     if st == 'stale_token':
         print('Uyarı: %d portunda eski PacketLens (token’lı sürüm) çalışıyor.' % port)
-        print('  Durdurun: pkill -f packetlens.py   ardından yeniden: sudo python3 packetlens.py')
+        print('  Yeniden başlatın: ./start.sh --restart   veya: pkill -f packetlens.py')
     return None
 
 
@@ -449,6 +472,12 @@ def main():
     ap.add_argument('--port', type=int, default=8765)
     ap.add_argument('--no-capture', action='store_true', help='canlı yakalamayı kapat (root gerekmez)')
     ap.add_argument('--no-browser', action='store_true', help='tarayıcıyı otomatik açma')
+    ap.add_argument('--restart', action='store_true',
+                      help='çalışan eski packetlens sürecini kapatıp bu oturumu ön planda başlat')
+    ap.add_argument('--attach', action='store_true',
+                      help='zaten çalışıyorsa yeni süreç başlatma, yalnızca tarayıcıyı aç ve çık')
+    ap.add_argument('--keep-running', action='store_true',
+                      help='--attach ile aynı: arka plandaki sürece dokunma')
     ap.add_argument('--scan-interval', type=int, default=0, metavar='DK',
                     help='dakikada bir ARP cihaz taraması (0=kapalı, root gerekir)')
     ARGS = ap.parse_args()
@@ -459,13 +488,20 @@ def main():
     if not ARGS.no_capture and os.geteuid() != 0:
         print('Not: root değilsiniz, canlı yakalama başlatılamaz (dosya analizi çalışır). Canlı yakalama için: sudo python3 packetlens.py')
 
-    running = _running_instance_url(ARGS.port)
-    if running:
+    if ARGS.restart:
+        stop_running_packetlens()
+
+    running = None if ARGS.restart else _running_instance_url(ARGS.port)
+    if running and (ARGS.attach or ARGS.keep_running):
         print('PacketLens zaten çalışıyor → %s' % running)
-        print('(Yeni bir kopya başlatılmadı; mevcut oturum tarayıcıda açılıyor.)')
+        print('(Arka plandaki süreç çalışmaya devam eder; durdurmak: pkill -f packetlens.py)')
         if not ARGS.no_browser:
             threading.Timer(0.3, open_browser, (running,)).start()
-        return
+        sys.exit(10)
+
+    if running:
+        print('Eski PacketLens süreci kapatılıyor…')
+        stop_running_packetlens()
 
     srv, port = None, ARGS.port
     for _ in range(20):
@@ -475,9 +511,9 @@ def main():
         except OSError:
             if port == ARGS.port:
                 st, _ = _probe_api(port)
-                if st == 'stale_token':
-                    print('Hata: %d dolu — eski sunucuyu kapatmadan yeni sürüm başlamaz.' % port)
-                    return
+                if st in ('stale_token', 'busy', 'ok'):
+                    print('Hata: %d portu meşgul. Deneyin: pkill -f packetlens.py  veya  python3 packetlens.py --restart' % port)
+                    sys.exit(1)
             port += 1
     if srv is None:
         print('Boş port bulunamadı (%d - %d arası denendi).' % (ARGS.port, port - 1))
