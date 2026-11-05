@@ -20,9 +20,12 @@ sudo python3 packetlens.py          # canlı yakalama + arayüz (tarayıcı otom
 python3 packetlens.py --no-capture  # root olmadan, sadece .pcap analizi (macOS'ta da çalışır)
 ```
 
-Tarayıcı açılmazsa terminalde yazan `http://127.0.0.1:8765/?t=...` adresini açın.
-Seçenekler: `-i eth0` (varsayılan arayüz), `--port 9000`, `--no-browser`.
-Sunucu olmadan `index.html` dosyasını doğrudan açıp `.pcap` / `.pcapng` yükleyebilirsiniz.
+Tarayıcı açılmazsa terminalde yazan **`http://127.0.0.1:8765/?t=...`** adresini **tam olarak** açın (`?t=` oturum anahtarı şart). Ana sayfada anahtar yoksa sunucu sizi otomatik yönlendirir.
+
+**macOS:** komut yazmak yerine proje klasöründeki **`start.command`** dosyasına çift tıklayın — sunucuyu başlatır ve tarayıcıyı doğru adreste otomatik açar. `index.html` dosyasına doğrudan çift tıklamayın: o zaman sayfa sunucusuz (`file://`) açılır ve canlı analiz çalışmaz.
+Seçenekler: `-i eth0` (varsayılan arayüz), `--port 9000`, `--no-browser`, `--scan-interval DK` (periyodik ARP taraması, root).
+Sunucu olmadan `index.html` dosyasını doğrudan açıp `.pcap` / `.pcapng` yükleyebilirsiniz (canlı analiz ve ptentes çalışmaz).
+macOS/Windows’ta canlı paket yakalama yoktur; `python3 packetlens.py --no-capture` ile dosya analizi yapılır.
 Uygulamayı denemek için **☰ Menü → Örnek yükle**.
 
 ## Kendi ağınızı analiz edin
@@ -80,6 +83,18 @@ Başlıktaki her zaman görünür büyük **▶ Analiz et** düğmesine basın. 
 - Yerel alt ağda ARP taraması; kimlik bilgileri, cihazlar ve olaylar için JSON rapor.
 - Durdurulduğunda ARP tablosu ve `ip_forward` otomatik geri alınır. Ayrıntı: [docs/ptentes.md](docs/ptentes.md).
 
+## Son güncellemeler · Recent updates
+
+| Türkçe | English |
+|--------|---------|
+| **Cihazlar:** mobil tanıma (mDNS, DHCP, MAC üretici, QUIC), “Yalnızca mobil” filtresi, **Mobil rapor .csv**, ARP/ping/port tarama, tarama karşılaştırma, playbook’lar. | **Devices:** mobile hints (mDNS, DHCP, vendor, QUIC), “Mobile only” filter, **mobile report CSV**, ARP/ping/port scan, scan compare, playbooks. |
+| **Misafir Wi‑Fi:** olası AP izolasyonu uyarısı, captive portal / HTTP User-Agent ipuçları. | **Guest Wi‑Fi:** possible AP isolation hint, captive portal / HTTP User-Agent alerts. |
+| **Pasif TLS/QUIC (`tlspassive.js`):** QUIC SNI, ECH tespiti, JA3 (MD5) + JA4, gelişmiş sertifika alanları (SAN, geçerlilik), beklenmeyen issuer / inspection CA uyarıları (içerik çözülmez). | **Passive TLS/QUIC (`tlspassive.js`):** QUIC SNI, ECH detection, JA3 (MD5) + JA4, richer cert fields (SAN, validity), unexpected issuer / inspection CA alerts (no decryption). |
+| **DoH/DoT:** bilinen DoH resolver’ları ve port 853 Siteler / Sorunlar’da. | **DoH/DoT:** known DoH resolvers and port 853 in Sites / Problems. |
+| **ptentes:** çoklu hedef (8’e kadar), oturum etiketi/not, çerezler, QUIC SNI + ECH sayacı, **Siteler** sekmesi, **Yakalamada izle**, MITM hazırlık listesi, ARP çakışma uyarısı. | **ptentes:** multi-target (up to 8), session label/note, cookies, QUIC SNI + ECH counters, **Sites** tab, **Watch in capture**, MITM readiness checklist, ARP conflict warning. |
+| **Sunucu:** cihaz kaydı API, webhook (`PACKETLENS_WEBHOOK`), `oui.json` üretici genişletme; canlı analiz bağlantı mesajları (token, macOS). | **Server:** device registry API, webhook (`PACKETLENS_WEBHOOK`), `oui.json` vendor lookup; clearer live-analysis connection messages (token, macOS). |
+| **Dışa aktarma:** Cihazlar + Mobil rapor CSV; TLS CSV’de JA3/JA4/ECH/QUIC alanları. | **Export:** Devices + mobile report CSV; TLS CSV with JA3/JA4/ECH/QUIC columns. |
+
 ## Ekran görüntüleri
 
 | | |
@@ -99,8 +114,10 @@ Canlı yakalama root gerektirir. **Yalnızca izleme yetkiniz olan ağlarda kulla
 
 | Dosya | Görev |
 |---|---|
-| `packetlens.py` | Yerel sunucu + canlı yakalama (AF_PACKET), adaptör ve ağ bilgisi |
-| `ptentes.py` | MITM motoru: ARP sahteciliği, HTTP/TLS/DNS gözlemi, DNS yönlendirme, ARP keşfi |
+| `packetlens.py` | Yerel sunucu + canlı yakalama (AF_PACKET), adaptör ve ağ bilgisi, cihaz API |
+| `deviceintel.py` | ARP/ping/port tarama, cihaz kaydı, geçmiş, karşılaştırma, webhook |
+| `ptentes.py` | MITM motoru: ARP sahteciliği, HTTP/TLS/QUIC/DNS gözlemi, DNS yönlendirme, ARP keşfi |
+| `tlspassive.js` | JA3/JA4, ECH, QUIC SNI, sertifika ayrıştırma, DoH listesi, issuer anomalisi |
 | `ptentes-ui.js` | ptentes kontrol paneli (oturum, canlı akış, kimlik bilgileri, DNS, cihazlar) |
 | `capfilter.py` | BPF yakalama filtresi (host/net/port/proto, and/or/not) |
 | `parser.js` | pcap/pcapng okuyucu, protokol çözümleme, akış ve sorun analizi |
@@ -129,4 +146,6 @@ python3 test_capfilter.py    # BPF filtresi (JS motoruyla çapraz doğrulama)
 - Canlı yakalama varsayılan olarak paket başına ilk 1600 bayt ve en fazla 300 bin paket tutar (Ayarlar'dan değiştirilebilir).
 - Yakalama filtresi tcpdump/BPF sözdiziminin yaygın bir alt kümesidir (ad çözümleme yok, `ether`/`vlan` yok).
 - Canlı yakalama ve adaptör listesi yalnızca Linux'ta çalışır.
-- Üretici adları küçük bir yerleşik MAC tablosundan gelir; rastgele (gizlilik) MAC'lerin üreticisi yoktur.
+- Üretici adları yerleşik tablo + `oui.json` ile gelir; rastgele (gizlilik) MAC'lerin üreticisi yoktur.
+- ECH açık bağlantılarda gerçek site adı görünmeyebilir; QUIC parçalı ClientHello’da SNI kaçabilir.
+- “Cihazda CA yüklü mü?” ağdan kesin tespit edilmez; yalnızca sunulan sertifika / issuer anomalisi uyarısı verilir (sahte CA / SSL strip yok).

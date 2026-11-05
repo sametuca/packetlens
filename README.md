@@ -20,9 +20,12 @@ sudo python3 packetlens.py          # live capture + GUI (opens in your browser)
 python3 packetlens.py --no-capture  # no root: analyze .pcap files only (works on macOS too)
 ```
 
-If the browser does not open, use the `http://127.0.0.1:8765/?t=...` address printed in the terminal.
-Options: `-i eth0` (default interface), `--port 9000`, `--no-browser`.
-You can also open `index.html` directly and load a `.pcap` / `.pcapng` file without the server.
+If the browser does not open, use the full **`http://127.0.0.1:8765/?t=...`** URL from the terminal (the `?t=` session token is required). If the token is missing, the server redirects automatically.
+
+**macOS:** double-click **`start.command`** in the project folder instead of typing commands — it starts the server and opens your browser at the right URL automatically. Do not double-click `index.html` directly: that opens the page without a server (`file://`) and live analysis will not work.
+Options: `-i eth0` (default interface), `--port 9000`, `--no-browser`, `--scan-interval MIN` (scheduled ARP scan, root).
+You can open `index.html` directly and load a `.pcap` / `.pcapng` without the server (no live capture or ptentes).
+On macOS/Windows there is no live packet capture; use `python3 packetlens.py --no-capture` for file analysis.
 Open the **☰ Menu → Load sample** to try the app with a built-in capture.
 
 ## Analyze your own network
@@ -74,11 +77,23 @@ The **Devices** tab lists every machine on the local network: IP, MAC, vendor (f
 - Problems are split into **Security / Performance / Network**.
 
 **ptentes (MITM)**
-- ARP sahteciliği ile hedef cihazı ağ geçidiyle makinenizin arasına alır; trafik akmaya devam ederken izlenir.
-- Şifresiz HTTP istekleri (Host, yol, User-Agent, Basic auth, form alanları), TLS SNI ve DNS sorguları canlı akışta görünür.
-- DNS eşlemesi ile seçili alan adlarına sahte yanıt verilebilir (`ornek.com=192.168.1.50`).
-- Yerel alt ağda ARP taraması; yakalanan kimlik bilgileri, cihazlar ve olaylar için JSON rapor.
-- Durdurulduğunda ARP tablosu ve `ip_forward` otomatik geri alınır. Ayrıntı: [docs/ptentes.md](docs/ptentes.md).
+- Places the target between your machine and the gateway via ARP spoofing; traffic keeps flowing while you observe.
+- Cleartext HTTP (Host, path, User-Agent, Basic auth, forms), TLS SNI, QUIC SNI, DNS queries and Set-Cookie in the live panel.
+- DNS map can spoof answers for chosen names (`example.com=192.168.1.50`).
+- Local ARP discovery; JSON report for credentials, cookies, events and hosts. Details: [docs/ptentes.md](docs/ptentes.md).
+- On stop, ARP entries and `ip_forward` are restored.
+
+## Recent updates · Son güncellemeler
+
+| English | Türkçe |
+|---------|--------|
+| **Devices:** mobile hints (mDNS, DHCP, vendor, QUIC), “Mobile only” filter, **mobile report CSV**, ARP/ping/port scan, scan compare, playbooks. | **Cihazlar:** mobil tanıma, “Yalnızca mobil” filtresi, **Mobil rapor .csv**, ARP/ping/port tarama, karşılaştırma, playbook’lar. |
+| **Guest Wi‑Fi:** possible AP isolation hint, captive portal / HTTP User-Agent alerts. | **Misafir Wi‑Fi:** AP izolasyonu ipucu, captive portal / User-Agent uyarıları. |
+| **Passive TLS/QUIC (`tlspassive.js`):** QUIC SNI, ECH detection, JA3 (MD5) + JA4, cert SAN/validity, inspection CA / issuer mismatch (no decryption). | **Pasif TLS/QUIC:** QUIC SNI, ECH, JA3/JA4, sertifika alanları, issuer anomalisi (içerik yok). |
+| **DoH/DoT** in Sites and Problems. | **DoH/DoT** Siteler ve Sorunlar’da. |
+| **ptentes:** multi-target, session label/note, cookies, QUIC/ECH KPIs, Sites tab, watch in capture, MITM checklist. | **ptentes:** çoklu hedef, etiket/not, çerezler, QUIC/ECH, Siteler, yakalamada izle, hazırlık listesi. |
+| **Server:** device registry API, webhook, `oui.json`; token redirect and clearer connection errors. | **Sunucu:** cihaz API, webhook, `oui.json`; token yönlendirme ve bağlantı mesajları. |
+| **Export:** Devices + mobile CSV; TLS CSV with JA3/JA4/ECH/QUIC. | **Dışa aktarma:** Cihazlar + mobil rapor; geniş TLS CSV. |
 
 ## Screenshots
 
@@ -99,8 +114,10 @@ Live capture needs root. **Use it only on networks you are authorized to monitor
 
 | File | Purpose |
 |---|---|
-| `packetlens.py` | Local server + live capture (AF_PACKET), adapter and network info |
-| `ptentes.py` | MITM engine: ARP spoofing, HTTP/TLS/DNS inspection, DNS redirection, ARP discovery |
+| `packetlens.py` | Local server + live capture (AF_PACKET), adapter/network info, device APIs |
+| `deviceintel.py` | ARP/ping/port scan, device registry, history, compare, webhook |
+| `ptentes.py` | MITM engine: ARP spoofing, HTTP/TLS/QUIC/DNS inspection, DNS redirection, discovery |
+| `tlspassive.js` | JA3/JA4, ECH, QUIC SNI, certificate parsing, DoH list, issuer anomaly hints |
 | `ptentes-ui.js` | ptentes control panel (session, live feed, credentials, DNS, hosts) |
 | `capfilter.py` | BPF capture filter (host/net/port/proto, and/or/not) |
 | `parser.js` | pcap/pcapng reader, protocol dissection, flow and problem analysis |
@@ -129,4 +146,6 @@ python3 test_capfilter.py    # BPF filter (cross-checked against the JS engine)
 - Live capture keeps the first 1600 bytes per packet by default and at most 300k packets (both adjustable in Settings).
 - The capture filter is a common subset of tcpdump/BPF syntax (no hostname resolution, no `ether`/`vlan`).
 - Live capture and the adapter list work on Linux only.
-- Vendor names use a small built-in MAC table; random (privacy) MACs have no vendor.
+- Vendor names use a built-in table plus `oui.json`; random (privacy) MACs have no vendor.
+- With ECH enabled the real site name may be hidden; QUIC SNI can be missing on fragmented ClientHello.
+- “User CA installed?” cannot be proven from the network alone; only certificate/issuer anomaly hints (no fake CA / SSL strip).
