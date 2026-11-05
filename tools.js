@@ -121,7 +121,8 @@ function install(PL) {
     const byFlow = new Map();
     for (const p of A.packets) {
       if (byFlow.has(p.flow)) continue;
-      if (p.sni) byFlow.set(p.flow, { d: p.sni, via: 'SNI', clear: false });
+      if (p.sni) byFlow.set(p.flow, { d: p.sni, via: p.quic && p.quic.sni ? 'QUIC SNI' : 'SNI', clear: false });
+      else if (p.quic && p.quic.sni) byFlow.set(p.flow, { d: p.quic.sni, via: 'QUIC SNI', clear: false });
       else if (p.http && p.http.host && HTTP_REQ.test(p.http.first || '')) byFlow.set(p.flow, { d: p.http.host, via: 'Host', clear: true });
     }
     const rows = new Map();
@@ -143,7 +144,20 @@ function install(PL) {
       if (!p.dns || p.dns.qr || p.app !== 'DNS' || !p.dns.questions[0]) continue;
       if (opts.nos && !opts.nos.has(p.no)) continue;
       const d = String(p.dns.questions[0].name).toLowerCase().replace(/\.$/, ''); if (!d) continue;
-      const r = get(p.src, d); r.dnsQ++; r.first = Math.min(r.first, p.ts); r.last = Math.max(r.last, p.ts); r.via.add('DNS');
+      const r = get(p.src, d); r.dnsQ++; r.first = Math.min(r.first, p.ts); r.last = Math.max(r.last, p.ts); r.via.add(PL.isDohHost && PL.isDohHost(d) ? 'DNS (DoH adayı)' : 'DNS');
+    }
+    for (const f of A.flows) {
+      if (opts.flows && !opts.flows.has(f.id)) continue;
+      if (f.bPort === 853 || f.aPort === 853) {
+        const ip = f.client; const r = get(ip, 'dot://' + f.server); r.flows.add(f.id); r.bytes += f.bytes; r.via.add('DoT (853)');
+      }
+      if (f.bPort === 443 && f.app === 'QUIC' && f.server) {
+        const ip = f.client;
+        if (PL.isDohHost && PL.isDohHost(A.names.get(f.server) || '')) {
+          const d = (A.names.get(f.server) || f.server).toLowerCase();
+          const r = get(ip, d); r.flows.add(f.id); r.bytes += f.bytes; r.via.add('DoH (QUIC)');
+        }
+      }
     }
     return [...rows.values()].map(r => ({ ...r, flows: r.flows.size, apps: [...r.apps], via: [...r.via] })).sort((a, b) => b.bytes - a.bytes || b.dnsQ - a.dnsQ || a.domain.localeCompare(b.domain));
   };
@@ -237,9 +251,47 @@ function install(PL) {
   /* ---------- cihazlar / yerel ağ ---------- */
   const OUI = { '000c29': 'VMware', '005056': 'VMware', '000569': 'VMware', '080027': 'VirtualBox', '525400': 'QEMU/KVM', '00155d': 'Microsoft Hyper-V',
     'b827eb': 'Raspberry Pi', 'dca632': 'Raspberry Pi', 'e45f01': 'Raspberry Pi', 'd83add': 'Raspberry Pi', '2ccf67': 'Raspberry Pi',
-    '00000c': 'Cisco', '001b54': 'Cisco', '000393': 'Apple', '000a95': 'Apple', '001b63': 'Apple', '3c22fb': 'Apple', 'f01898': 'Apple', 'acbc32': 'Apple', 'a483e7': 'Apple',
-    '24a43c': 'Ubiquiti', '44d9e7': 'Ubiquiti', '802aa8': 'Ubiquiti', 'fcecda': 'Ubiquiti', '3c5ab4': 'Google', 'f4f5d8': 'Google', '546009': 'Google',
-    'fc65de': 'Amazon', '44650d': 'Amazon', '246f28': 'Espressif (IoT)', '30aea4': 'Espressif (IoT)', '840d8e': 'Espressif (IoT)', '001b21': 'Intel', 'a4c3f0': 'Intel' };
+    '00000c': 'Cisco', '001b54': 'Cisco', '001e7a': 'Cisco', '000393': 'Apple', '000a95': 'Apple', '001b63': 'Apple', '3c22fb': 'Apple', 'f01898': 'Apple',
+    'acbc32': 'Apple', 'a483e7': 'Apple', '28ff3c': 'Apple', '001e06': 'Apple', '24a43c': 'Ubiquiti', '44d9e7': 'Ubiquiti', '802aa8': 'Ubiquiti',
+    '3c5ab4': 'Google', 'f4f5d8': 'Google', 'fc65de': 'Amazon', '44650d': 'Amazon', '246f28': 'Espressif (IoT)', '30aea4': 'Espressif (IoT)',
+    '001b21': 'Intel', 'a4c3f0': 'Intel', '0050f2': 'Microsoft', '001dd8': 'Samsung', '002454': 'Samsung', '4844f7': 'Samsung', '00259c': 'Huawei',
+    '001882': 'Huawei', '001d0f': 'TP-Link', '50c7bf': 'TP-Link', '00163e': 'Xiaomi', '640980': 'Xiaomi', '0013d3': 'Asus', '0018e7': 'Hikvision',
+    'a4e975': 'Apple', 'd0c5f3': 'Apple', '8cf112': 'Samsung', 'c0bd42': 'Samsung', 'e4f385': 'Google', '94eb2c': 'Google', 'ac3743': 'Huawei',
+    '2c3f38': 'Motorola', '001a11': 'Google (Nest)' };
+  const MOBILE_VENDORS = /apple|samsung|google|xiaomi|huawei|oneplus|oppo|vivo|motorola|nokia|honor|realme|sony|lg electronics|htc|meizu|zte|nothing/i;
+
+  PL.inferMobile = function (d, h) {
+    const name = String(d.name || '').toLowerCase();
+    const vc = String(d.dhcpClass || '').toLowerCase();
+    const ua = String((h && h.userAgent) || '').toLowerCase();
+    const vendor = String(d.vendor || '');
+    const os = String(d.os || '').toLowerCase();
+    const apps = d.apps || [];
+    if (/iphone|ipod/.test(name) || /iphone os|cpu iphone/.test(ua) || vc.includes('iphone')) {
+      return { mobile: true, kind: 'telefon', platform: 'iOS', confidence: 'yüksek', hint: 'mDNS/DHCP/UA' };
+    }
+    if (/ipad/.test(name) || /ipad/.test(ua)) {
+      return { mobile: true, kind: 'tablet', platform: 'iPadOS', confidence: 'yüksek', hint: 'iPad' };
+    }
+    if (/android/.test(ua) || vc.includes('android') || name.includes('android') || vc.includes('dhcpcd')) {
+      const tablet = /tablet|sm-t|tab/i.test(ua + name);
+      return { mobile: true, kind: tablet ? 'tablet' : 'telefon', platform: 'Android', confidence: ua ? 'yüksek' : 'orta', hint: vc || 'Android DHCP/UA' };
+    }
+    if (vendor === 'Apple' && (os.includes('macos') || os.includes('ios') || d.os === 'macOS / iOS / BSD')) {
+      return { mobile: true, kind: /ipad/.test(name) ? 'tablet' : 'telefon', platform: 'Apple', confidence: 'orta', hint: 'Apple + TCP parmak izi' };
+    }
+    if (MOBILE_VENDORS.test(vendor)) {
+      return { mobile: true, kind: 'telefon', platform: vendor, confidence: 'orta', hint: 'MAC üretici' };
+    }
+    if (vendor === 'Rastgele MAC' && (apps.includes('QUIC') || (h && h.quicPkts > 3))) {
+      return { mobile: true, kind: 'telefon', platform: 'Muhtemelen mobil', confidence: 'düşük', hint: 'Gizli MAC + QUIC' };
+    }
+    if ((h && h.mdnsPkts > 2) && /galaxy|pixel|phone|mobile|watch|buds|android/i.test(name + ua)) {
+      return { mobile: true, kind: 'telefon', platform: 'Mobil/IoT', confidence: 'düşük', hint: 'mDNS adı' };
+    }
+    return { mobile: false, kind: '', platform: '', confidence: '', hint: '' };
+  };
+
   PL.vendor = function (mac) {
     if (!mac) return '';
     const k = mac.toLowerCase().replace(/[^0-9a-f]/g, '').slice(0, 6);
@@ -248,7 +300,62 @@ function install(PL) {
     return '';
   };
   const macHex = (d, o) => { let s = ''; for (let i = 0; i < 6; i++) s += (i ? ':' : '') + d[o + i].toString(16).padStart(2, '0'); return s; };
-  // net: { gateway:{ip}, dns:[...], arp:[{ip,mac}] , self:[ip,...] } (isteğe bağlı, sunucudan)
+  const SVC_TCP = { 20: 'FTP', 21: 'FTP', 22: 'SSH', 23: 'Telnet', 25: 'SMTP', 53: 'DNS', 80: 'HTTP', 110: 'POP3', 443: 'HTTPS', 445: 'SMB', 3389: 'RDP', 8080: 'HTTP' };
+
+  PL.problemsForIp = function (A, ip) {
+    if (!A || !ip) return [];
+    const nm = A.nm;
+    return (A.problems || []).filter(pr => {
+      if (pr.flow) {
+        const f = A.flows[pr.flow - 1];
+        return f && (f.client === ip || f.server === ip);
+      }
+      return (pr.plain && (pr.plain.includes(ip) || pr.plain.includes(nm(ip))));
+    });
+  };
+
+  PL.loadOui = function () {
+    if (PL._ouiLoaded || typeof fetch !== 'function') return Promise.resolve();
+    return fetch('oui.json?t=' + encodeURIComponent((window.PLApp && PLApp.S && PLApp.S.srv && PLApp.S.srv.commit) || '1'))
+      .then(r => r.ok ? r.json() : {})
+      .then(j => { if (j && typeof j === 'object') Object.assign(OUI, j); PL._ouiLoaded = true; })
+      .catch(() => { PL._ouiLoaded = true; });
+  };
+
+  PL.buildHostIntel = function (A) {
+    const nm = A.nm, score = new Map();
+    const bump = (ip, pts, tag) => {
+      if (!ip || !/^\d+\.\d+\.\d+\.\d+$/.test(ip)) return;
+      let e = score.get(ip); if (!e) score.set(ip, e = { risk: 0, tags: new Set() });
+      e.risk += pts; if (tag) e.tags.add(tag);
+    };
+    for (const pr of A.problems || []) {
+      let ips = [];
+      if (pr.flow) { const f = A.flows[pr.flow - 1]; if (f) ips = [f.client, f.server]; }
+      const sev = pr.sev === 'high' ? 30 : pr.sev === 'med' ? 15 : 5;
+      for (const ip of ips) bump(ip, sev, pr.type);
+      if (pr.type === 'arp') for (const ip of [...(A.hosts.keys())]) if (pr.plain && pr.plain.includes(ip)) bump(ip, 40, 'arp');
+    }
+    for (const c of A.creds || []) {
+      for (const f of A.flows) if (f.host === c.host || f.server === c.host) bump(f.client, 35, 'cred');
+    }
+    for (const [ip, h] of A.hosts) {
+      const e = score.get(ip);
+      h.risk = e ? Math.min(100, e.risk) : 0;
+      h.riskTags = e ? [...e.tags] : [];
+      h.problemIds = PL.problemsForIp(A, ip).map(p => p.id);
+    }
+    A.deviceRisk = score;
+  };
+
+  const _analyze = PL.analyze;
+  PL.analyze = function (packets) {
+    const A = _analyze(packets);
+    PL.buildHostIntel(A);
+    return A;
+  };
+
+  // net: { gateway:{ip}, dns:[...], arp:[{ip,mac}] , self:[ip,...], registry:[...] } (isteğe bağlı, sunucudan)
   PL.devices = function (A, net) {
     net = net || {};
     const macs = new Map(), gwCount = new Map();
@@ -272,23 +379,115 @@ function install(PL) {
     const self = new Set(net.self || []);
     const appsOf = new Map(); for (const f of A.flows) for (const ip of [f.client, f.server]) { let m = appsOf.get(ip); if (!m) appsOf.set(ip, m = new Map()); m.set(f.app, (m.get(f.app) || 0) + f.bytes); }
     const out = new Map();
-    const mk = ip => { let o = out.get(ip); if (!o) { const mac = macOf.get(ip) || ''; out.set(ip, o = { ip, mac, vendor: PL.vendor(mac), name: A.names.get(ip) || '', os: '', roles: [], bytesTx: 0, bytesRx: 0, flows: 0, apps: [], first: Infinity, last: 0, silent: false, self: self.has(ip) }); } return o; };
+    const portLabel = p => SVC_TCP[p] || ('TCP/' + p);
+    const mk = ip => {
+      let o = out.get(ip);
+      if (!o) {
+        const mac = macOf.get(ip) || '';
+        out.set(ip, o = { ip, mac, vendor: PL.vendor(mac), name: A.names.get(ip) || '', os: '', roles: [], bytesTx: 0, bytesRx: 0, flows: 0,
+          apps: [], first: Infinity, last: 0, silent: false, self: self.has(ip), portsOut: [], portsOpen: [], dhcpClass: '', risk: 0, riskTags: [], scanPorts: [],
+          mobile: false, mobileKind: '', mobilePlatform: '', mobileConf: '', mobileHint: '' });
+      }
+      return o;
+    };
     for (const [ip, h] of A.hosts) {
-      if (!ipOk(ip) || !isLocalIp(ip) || !(h.pktsTx > 0 || macOf.has(ip))) continue; // hiç yanıt vermeyen tarama hedefleri cihaz sayılmaz
+      if (!ipOk(ip) || !isLocalIp(ip) || !(h.pktsTx > 0 || macOf.has(ip))) continue;
       const o = mk(ip); o.os = h.os || ''; o.bytesTx = h.bytesTx; o.bytesRx = h.bytesRx; o.flows = h.flows ? h.flows.size : 0;
       o.first = h.first != null ? h.first : o.first; o.last = h.last != null ? h.last : o.last;
+      o.dhcpClass = h.dhcpClass || o.dhcpClass;
+      o.risk = h.risk || 0; o.riskTags = h.riskTags || []; o.problemIds = h.problemIds || [];
+      if (h.portsOut && h.portsOut.size) o.portsOut = [...h.portsOut.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([p, n]) => ({ port: p, n, svc: portLabel(p) }));
+      if (h.openPorts && h.openPorts.size) o.portsOpen = [...h.openPorts].sort((a, b) => a - b).slice(0, 16).map(p => ({ port: p, svc: portLabel(p) }));
+    }
+    for (const r of (net.registry || [])) {
+      if (!r || !r.ip) continue;
+      const o = mk(r.ip);
+      if (r.mac && !o.mac) o.mac = r.mac;
+      if (r.vendor) o.vendor = r.vendor;
+      if (r.name) o.name = r.name;
+      if (r.ports && r.ports.length) o.scanPorts = r.ports.map(p => ({ port: p, svc: portLabel(p) }));
+      if (r.alive) o.silent = false;
     }
     for (const f of A.flows) for (const ip of [f.client, f.server]) { const o = out.get(ip); if (o) { o.first = Math.min(o.first, f.start); o.last = Math.max(o.last, f.end); } }
     for (const n of (net.arp || [])) if (ipOk(n.ip) && !out.has(n.ip)) { const o = mk(n.ip); o.silent = true; }
     if (gwIp) { const o = out.get(gwIp) || mk(gwIp); if (!o.roles.includes('Ağ geçidi (router)')) o.roles.push('Ağ geçidi (router)'); }
     for (const [ip, c] of dnsServers) { const o = out.get(ip); if (o && !o.roles.includes('DNS sunucusu')) o.roles.push('DNS sunucusu'); }
     for (const ip of dhcp) { const o = out.get(ip); if (o && !o.roles.includes('DHCP sunucusu')) o.roles.push('DHCP sunucusu'); }
-    for (const o of out.values()) { if (o.self) o.roles.unshift('Bu bilgisayar'); const m = appsOf.get(o.ip); o.apps = m ? [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(x => x[0]) : []; }
+    for (const o of out.values()) {
+      if (o.self) o.roles.unshift('Bu bilgisayar');
+      const m = appsOf.get(o.ip); o.apps = m ? [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(x => x[0]) : [];
+      const h = A.hosts.get(o.ip);
+      const mob = PL.inferMobile(o, h);
+      o.mobile = mob.mobile; o.mobileKind = mob.kind; o.mobilePlatform = mob.platform; o.mobileConf = mob.confidence; o.mobileHint = mob.hint;
+      if (mob.mobile && !o.roles.includes('Mobil cihaz')) o.roles.push('Mobil cihaz');
+      if (mob.kind === 'tablet' && !o.roles.includes('Tablet')) o.roles.push('Tablet');
+    }
     const list = [...out.values()].sort((a, b) => (b.bytesTx + b.bytesRx) - (a.bytesTx + a.bytesRx) || a.ip.localeCompare(b.ip));
+    const mobileCount = list.filter(d => d.mobile).length;
     // alt ağ tahmini: en sık görülen /24 (IPv4)
     const nets = new Map(); list.forEach(o => { const m = /^(\d+\.\d+\.\d+)\.\d+$/.exec(o.ip); if (m) nets.set(m[1], (nets.get(m[1]) || 0) + 1); });
     const subnet = [...nets.entries()].sort((a, b) => b[1] - a[1])[0];
-    return { devices: list, gateway: gwIp, gatewayMac: gwMac || (gwIp && macOf.get(gwIp)) || '', dns: [...dnsServers.entries()].sort((a, b) => b[1] - a[1]).map(x => x[0]), subnet: subnet ? subnet[0] + '.0/24' : '' };
+    return { devices: list, mobileCount, gateway: gwIp, gatewayMac: gwMac || (gwIp && macOf.get(gwIp)) || '', dns: [...dnsServers.entries()].sort((a, b) => b[1] - a[1]).map(x => x[0]), subnet: subnet ? subnet[0] + '.0/24' : '' };
+  };
+
+  /** Misafir Wi‑Fi / AP client isolation ipucu: çok yerel cihaz görünür ama cihazlar arası unicast akış yok. */
+  PL.detectApIsolation = function (A) {
+    if (!A || !A.flows) return { likely: false, localCount: 0, crossFlows: 0, confidence: '', hint: '' };
+    const locals = new Set();
+    for (const ip of A.hosts.keys()) if (PL.isPrivate(ip)) locals.add(ip);
+    for (const p of A.packets) {
+      if (p.arp && p.arp.si && PL.isPrivate(p.arp.si)) locals.add(p.arp.si);
+      if (p.arp && p.arp.ti && PL.isPrivate(p.arp.ti)) locals.add(p.arp.ti);
+    }
+    let crossFlows = 0, crossBytes = 0;
+    for (const f of A.flows) {
+      if (f.client === f.server) continue;
+      if (!PL.isPrivate(f.client) || !PL.isPrivate(f.server)) continue;
+      if (f.bytes < 80 && f.pkts < 3) continue;
+      crossFlows++; crossBytes += f.bytes;
+    }
+    const touched = new Set();
+    for (const f of A.flows) {
+      if (PL.isPrivate(f.client)) touched.add(f.client);
+      if (PL.isPrivate(f.server)) touched.add(f.server);
+    }
+    const localCount = Math.max(locals.size, touched.size);
+    if (localCount >= 3 && crossFlows === 0 && A.stats && A.stats.packets >= 200) {
+      const confidence = localCount >= 6 ? 'yüksek' : localCount >= 4 ? 'orta' : 'düşük';
+      return {
+        likely: true, localCount, crossFlows, crossBytes, confidence,
+        hint: 'Yerel ağda birçok adres (ARP/mDNS/DHCP) görünüyor ancak iki cihaz arasında TCP/UDP akışı yok. Misafir Wi‑Fi veya AP izolasyonu olabilir; Wi‑Fi şifrelemesi nedeniyle başka istemcilerin unicast trafiği zaten görünmeyebilir.',
+      };
+    }
+    return { likely: false, localCount, crossFlows, crossBytes, confidence: '', hint: '' };
+  };
+
+  /** Mobil cihaz + en çok ziyaret edilen alan adları (CSV/rapor). */
+  PL.mobileDeviceReport = function (A, net) {
+    const D = PL.devices(A, net || {});
+    const sites = PL.sites(A, {});
+    const byClient = new Map();
+    for (const s of sites) {
+      if (!s.client || !PL.isPrivate(s.client)) continue;
+      let list = byClient.get(s.client);
+      if (!list) byClient.set(s.client, list = []);
+      list.push(s);
+    }
+    for (const list of byClient.values()) list.sort((a, b) => b.bytes - a.bytes || b.dnsQ - a.dnsQ);
+    const rows = [];
+    for (const d of D.devices) {
+      if (!d.mobile) continue;
+      const h = A.hosts.get(d.ip);
+      const top = (byClient.get(d.ip) || []).slice(0, 12);
+      rows.push({
+        device: d,
+        topSites: top,
+        userAgent: (h && h.userAgent) ? h.userAgent.slice(0, 200) : '',
+        siteSummary: top.map(r => r.domain + (r.bytes ? ' (' + r.bytes + ' B)' : '')).join('; '),
+      });
+    }
+    rows.sort((a, b) => (b.device.bytesTx + b.device.bytesRx) - (a.device.bytesTx + a.device.bytesRx));
+    return { rows, mobileCount: rows.length, isolation: PL.detectApIsolation(A) };
   };
 
   /* ---------- hazır filtre kütüphanesi (Wireshark'ta aratıp bulunan filtreler) ---------- */

@@ -68,9 +68,10 @@ function install(PL) {
     const by = new Map();
     for (const p of A.packets) if (p.tls) {
       let e = by.get(p.flow);
-      if (!e) { const f = A.flows[p.flow - 1]; e = { flow: p.flow, client: f.client, server: f.server, no: p.no, t: p.ts, sni: null, offered: [], ciphers: [], alpn: [], version: null, cipher: null, cert: null, hsMs: null, weak: [] }; by.set(p.flow, e); }
+      if (!e) { const f = A.flows[p.flow - 1]; e = { flow: p.flow, client: f.client, server: f.server, no: p.no, t: p.ts, sni: null, offered: [], ciphers: [], alpn: [], version: null, cipher: null, cert: null, hsMs: null, weak: [], ja3Hash: '', ja4: '', ech: false, quic: false }; by.set(p.flow, e); }
       const t = p.tls;
-      if (t.ht === 1) { e.sni = p.sni || e.sni; e.offered = t.versions && t.versions.length ? t.versions : [t.legacy]; e.ciphers = t.ciphers || []; e.alpn = t.alpn || []; e.tCH = p.ts; e.chNo = p.no; }
+      if (t.ht === 1) { e.sni = p.sni || e.sni; e.offered = t.versions && t.versions.length ? t.versions : [t.legacy]; e.ciphers = t.ciphers || []; e.alpn = t.alpn || []; e.tCH = p.ts; e.chNo = p.no; e.ja3Hash = t.ja3Hash || e.ja3Hash; e.ja4 = t.ja4 || e.ja4; e.ech = e.ech || !!t.ech; }
+      if (p.quic && p.quic.sni) { e.sni = e.sni || p.quic.sni; e.quic = true; e.ja3Hash = e.ja3Hash || p.quic.ja3Hash; e.ja4 = e.ja4 || p.quic.ja4; e.ech = e.ech || !!p.quic.ech; }
       else if (t.ht === 2) { e.version = t.version; e.cipher = t.cipher; e.shNo = p.no; }
       else if (t.ht === 11 && t.cert) e.cert = t.cert;
       if ((t.rt === 23 || t.ht === 20) && e.tCH != null && e.hsMs == null) e.hsMs = (p.ts - e.tCH) * 1000;
@@ -80,6 +81,9 @@ function install(PL) {
       if (e.version != null && e.version <= 0x0302) e.weak.push((PL.TLSV[e.version] || 'eski sürüm') + ' kullanılıyor');
       if (e.cipher != null && PL.WEAK_CIPHERS.has(e.cipher)) e.weak.push('zayıf şifre: ' + PL.cipherName(e.cipher));
       if (e.version == null && e.offered.length && Math.max.apply(null, e.offered) <= 0x0302) e.weak.push('yalnızca eski TLS sürümleri öneriliyor');
+      if (e.cert && e.cert.selfSigned) e.weak.push('kendinden imzalı sertifika');
+      if (e.ech) e.weak.push('ECH (iç SNI gizli olabilir)');
+      if (PL.certAnomaly) { const a = PL.certAnomaly(e.sni, e.cert); if (a) e.weak.push(a.title + ': ' + a.detail); }
     }
     return out;
   };
@@ -222,9 +226,127 @@ function install(PL) {
     for (const [k, e] of tgt) if (e.n >= 100 && e.ok / e.n < 0.3) addProblem({ sev: 'high', type: 'synflood', title: 'Olası SYN seli (DoS)', flow: null, ts: e.f.start, pkts: e.f.pnos.slice(0, 5),
       plain: `${k} hedefine ${e.n} bağlantı isteği geldi ve yalnızca %${Math.round(e.ok / e.n * 100)} kadarı yanıtlandı.`, advice: 'SYN cookie açın, bağlantı hız sınırı uygulayın ve kaynak adresleri inceleyin.' });
 
-    // 8) Zayıf TLS
-    for (const e of PL.tlsLog(A)) if (e.weak.length) addProblem({ sev: 'med', type: 'weaktls', title: 'Zayıf/eski TLS ayarı', flow: e.flow, ts: e.t, pkts: [e.shNo || e.chNo || e.no],
-      plain: `${nm(e.client)} ↔ ${e.sni || nm(e.server)}: ${e.weak.join('; ')}. Eski sürümler ve şifreler bilinen saldırılara açıktır.`, advice: 'Sunucu/istemcide TLS 1.2 veya 1.3 ve modern şifre takımlarını zorunlu kılın.' });
+    // 8) TLS / QUIC metadata
+    const ja3Seen = new Set(), echSeen = new Set(), certSeen = new Set();
+    for (const e of PL.tlsLog(A)) {
+      const wtls = e.weak.filter(x => !/ECH|inspection|Beklenmeyen|uyuşmaz|Kendinden imzalı/i.test(x));
+      if (wtls.length) addProblem({ sev: 'med', type: 'weaktls', title: 'Zayıf/eski TLS ayarı', flow: e.flow, ts: e.t, pkts: [e.shNo || e.chNo || e.no],
+        plain: `${nm(e.client)} ↔ ${e.sni || nm(e.server)}: ${wtls.join('; ')}.`, advice: 'Sunucu/istemcide TLS 1.2 veya 1.3 ve modern şifre takımlarını zorunlu kılın.' });
+      if (e.ech && !echSeen.has(e.client)) { echSeen.add(e.client);
+        addProblem({ sev: 'low', type: 'ech', title: 'Encrypted Client Hello (ECH)', flow: e.flow, ts: e.t, pkts: [e.chNo || e.no],
+          plain: `${nm(e.client)} ECH kullanıyor; görünen SNI dış kabuk olabilir, gerçek site adı şifreli kalır.`, advice: 'Site listesinde yalnızca DNS ve dış SNI güvenilir olmayabilir.' });
+      }
+      const fp = (e.ja4 || e.ja3Hash || '') + '|' + e.client;
+      if ((e.ja4 || e.ja3Hash) && !ja3Seen.has(fp)) { ja3Seen.add(fp);
+        addProblem({ sev: 'low', type: 'ja3', title: e.quic ? 'QUIC/TLS parmak izi' : 'TLS JA3/JA4 parmak izi', flow: e.flow, ts: e.t, pkts: [e.chNo || e.no],
+          plain: `${nm(e.client)} → ${e.sni || nm(e.server)}${e.quic ? ' (QUIC)' : ''}: JA3=${e.ja3Hash || '—'}${e.ja4 ? ' · JA4=' + e.ja4 : ''}.`, advice: 'İstemci yığınını tanımlamak için tehdit istihbaratı veya cihaz envanteri ile karşılaştırın.' });
+      }
+      if (PL.certAnomaly && e.cert) {
+        const a = PL.certAnomaly(e.sni, e.cert);
+        if (a && !certSeen.has(e.flow + '|' + a.kind)) { certSeen.add(e.flow + '|' + a.kind);
+          addProblem({ sev: a.kind === 'inspection' ? 'med' : 'low', type: 'certanom', title: a.title, flow: e.flow, ts: e.t, pkts: [e.shNo || e.no],
+            plain: `${nm(e.client)} ↔ ${e.sni || nm(e.server)}: ${a.detail}. Bu, kurumsal SSL inspection, debug proxy veya kullanıcı CA’si ile uyumludur; ağdan “CA yüklü mü” kesin söylenemez.`, advice: 'Beklenmeyen issuer görürseniz cihaz profilini ve güvenilen sertifikaları doğrulayın.' });
+        }
+      }
+    }
+    const dohSeen = new Set();
+    for (const f of A.flows) {
+      if (f.bPort === 853 || f.aPort === 853) {
+        const k = f.client + '|dot'; if (dohSeen.has(k)) continue; dohSeen.add(k);
+        addProblem({ sev: 'low', type: 'dot', title: 'DNS-over-TLS (port 853)', flow: f.id, ts: f.start, pkts: f.pnos.slice(0, 2),
+          plain: `${nm(f.client)} → ${nm(f.server)}:853 üzerinden şifreli DNS (DoT). Alan adı sorguları klasik DNS sekmesinde görünmeyebilir.`, advice: 'Resolver adresini ve cihaz DNS ayarlarını kontrol edin.' });
+      }
+    }
+    if (PL.isDohHost) for (const p of pk) {
+      if (!p.dns || p.dns.qr || !p.dns.questions[0]) continue;
+      const name = p.dns.questions[0].name;
+      if (!PL.isDohHost(name)) continue;
+      const k = p.src + '|' + name; if (dohSeen.has(k)) continue; dohSeen.add(k);
+      addProblem({ sev: 'low', type: 'doh', title: 'DNS-over-HTTPS adayı', flow: p.flow, ts: p.ts, pkts: [p.no],
+        plain: `${nm(p.src)}, "${name}" sorguladı (DoH/Private DNS resolver).`, advice: 'Mobil cihazlarda özel DNS açık olabilir; site listesi eksik kalabilir.' });
+    }
+
+    // 9) NTLM / Kerberos ipuçları
+    const ntlmF = new Set(), krbF = new Set();
+    for (const p of pk) {
+      if (p.proto !== 'TCP' || p.payloadLen < 8) continue;
+      const txt = latin(PL.payload(p).subarray(0, 1200));
+      if (/NTLMSSP/i.test(txt) && !ntlmF.has(p.flow)) { ntlmF.add(p.flow);
+        addProblem({ sev: 'med', type: 'ntlm', title: 'NTLM oturumu', flow: p.flow, ts: p.ts, pkts: [p.no],
+          plain: `${nm(p.src)} ile ${nm(p.dst)} arasında NTLM kimlik doğrulama trafiği görüldü.`, advice: 'Kerberos veya modern SSO tercih edin; NTLM zayıf ve relay saldırılarına açıktır.' });
+      }
+      if ((p.app === 'Kerberos' || p.dport === 88 || p.sport === 88) && !krbF.has(p.flow)) { krbF.add(p.flow);
+        addProblem({ sev: 'low', type: 'kerberos', title: 'Kerberos trafiği', flow: p.flow, ts: p.ts, pkts: [p.no],
+          plain: `${nm(p.src)} Kerberos (port 88) kullanıyor — etki alanı oturumu.`, advice: 'Beklenmeyen istemcilerde etki alanı günlüklerini kontrol edin.' });
+      }
+    }
+
+    // 10) Yatay hareket ipuçları (SMB/RDP/WinRM iç tarama)
+    const lateral = new Map();
+    for (const f of A.flows) {
+      if (!PL.isPrivate(f.client) || !PL.isPrivate(f.server) || f.client === f.server) continue;
+      if (![445, 3389, 5985, 135].includes(f.bPort)) continue;
+      let s = lateral.get(f.client); if (!s) lateral.set(f.client, s = new Set()); s.add(f.server + ':' + f.bPort);
+    }
+    for (const [src, targets] of lateral) if (targets.size >= 4) addProblem({ sev: 'med', type: 'lateral', title: 'Olası yatay hareket / iç servis taraması', flow: null, ts: t0, pkts: [],
+      plain: `${nm(src)} yerel ağda ${targets.size} farklı hedefe SMB/RDP/WinRM benzeri bağlantı denemesi yaptı.`, advice: 'Kaynağı doğrulayın; beklenmeyense cihazı izole edin ve EDR ile inceleyin.' });
+
+    // 11) IoT protokolleri
+    const iotF = new Set();
+    for (const f of A.flows) {
+      if (!['MQTT', 'Modbus', 'CoAP'].includes(f.app) || iotF.has(f.id)) continue;
+      iotF.add(f.id);
+      addProblem({ sev: 'low', type: 'iot', title: `IoT/OT protokolü: ${f.app}`, flow: f.id, ts: f.start, pkts: f.pnos.slice(0, 3),
+        plain: `${nm(f.client)} ↔ ${nm(f.server)} ${f.app} trafiği (port ${f.bPort}).`, advice: 'IoT cihazlarını ayrı VLAN’da tutun; varsayılan parolaları değiştirin.' });
+    }
+
+    // 12) Captive portal / otel-misafir Wi‑Fi giriş sayfası
+    const CAPTIVE_HOST = /captive\.apple\.com|apple\.com\/library\/test|connectivitycheck\.|msftconnecttest\.|detectportal\.|network-test|hotspot-detect|clients\d*\.google|gstatic\.com\/generate_204|wifi\.|portal\.|login\.|guest\.|\/hotspot/i;
+    const CAPTIVE_PATH = /\/generate_204|\/connecttest\.txt|\/ncsi\.txt|\/redirect|\/login|\/portal|\/hotspot-detect|success\.txt/i;
+    const captiveSeen = new Set();
+    for (const p of pk) {
+      if (!p.http) continue;
+      const host = (p.http.host || '').toLowerCase();
+      const path = (p.http.path || '').toLowerCase();
+      const hit = CAPTIVE_HOST.test(host) || CAPTIVE_PATH.test(path) || (p.http.status >= 301 && p.http.status <= 307 && /login|portal|hotspot|wifi/i.test(path + host));
+      if (!hit || captiveSeen.has(p.flow)) continue;
+      captiveSeen.add(p.flow);
+      const f = A.flows[p.flow - 1];
+      addProblem({ sev: 'low', type: 'captive', title: 'Captive portal / Wi‑Fi giriş sayfası', flow: p.flow, ts: p.ts, pkts: [p.no],
+        plain: `${nm(f.client)} şifresiz HTTP ile ${host || nm(f.server)}${path ? path : ''} adresine istek yaptı. Bu, otel/havalimanı/misafir ağında “Wi‑Fi’ye giriş yap” veya bağlantı testi (Apple/Google/Microsoft) davranışına benzer.`,
+        advice: 'Tarayıcıda giriş sayfasını tamamlayın. Bu ağda izolasyon veya DNS yönlendirme olabilir; diğer cihazların trafiğini görememeniz normal olabilir.' });
+    }
+    for (const e of PL.dnsLog(A)) {
+      const name = (e.name || '').toLowerCase();
+      if (!CAPTIVE_HOST.test(name) || captiveSeen.has('dns|' + e.client + '|' + name)) continue;
+      captiveSeen.add('dns|' + e.client + '|' + name);
+      addProblem({ sev: 'low', type: 'captive', title: 'Captive portal DNS sorgusu', flow: e.flow, ts: e.t, pkts: [e.no],
+        plain: `${nm(e.client)}, "${e.name}" alan adını sorguladı (bağlantı kontrolü / portal).`, advice: 'Mobil cihazlar internete çıkmadan önce bu tür adları sık sorgular.' });
+    }
+
+    // 13) HTTP User-Agent (mobil cihaz tanıma)
+    const uaHost = new Set();
+    for (const p of pk) {
+      if (!p.http || !p.http.userAgent || !p.http.method) continue;
+      const ua = p.http.userAgent;
+      const mob = /iPhone|iPad|iPod|Android|Mobile Safari|CFNetwork|Dalvik|okhttp|Darwin/i.test(ua);
+      if (!mob || uaHost.has(p.src)) continue;
+      uaHost.add(p.src);
+      const h = A.hosts.get(p.src);
+      if (h && !h.userAgent) h.userAgent = ua.slice(0, 400);
+      addProblem({ sev: 'low', type: 'mobileua', title: 'Mobil cihaz User-Agent (HTTP)', flow: p.flow, ts: p.ts, pkts: [p.no],
+        plain: `${nm(p.src)} şifresiz HTTP isteğinde mobil User-Agent kullandı: "${ua.slice(0, 100)}${ua.length > 100 ? '…' : ''}".`,
+        advice: 'Cihazlar sekmesinde mobil etiketini doğrulayın; çoğu uygulama trafiği yine HTTPS/QUIC ile gider.' });
+    }
+
+    // 14) AP izolasyonu / misafir ağ ipucu
+    const iso = PL.detectApIsolation(A);
+    if (iso.likely) {
+      A.apIsolation = iso;
+      addProblem({ sev: 'low', type: 'apiso', title: 'Olası AP izolasyonu (misafir Wi‑Fi)', flow: null, ts: t0, pkts: [],
+        plain: `Yakalamada ~${iso.localCount} yerel adres görünüyor ancak cihazlar arası unicast bağlantı yok. Erişim noktası istemcilerin birbirine trafik iletmesini engelliyor olabilir; PacketLens yalnızca kendi oturumunuzun trafiğini ve yayın/multicast paketlerini görür.`,
+        advice: 'Ev ağında test edin veya izolasyon kapalı bir SSID kullanın. Wi‑Fi’de başka telefonların trafiği için monitor modu gerekir; bu uyarı izolasyon veya şifreleme sınırını ayırt etmez.' });
+    } else A.apIsolation = iso;
   };
   return PL;
 }

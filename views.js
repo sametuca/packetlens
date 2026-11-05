@@ -167,8 +167,11 @@ function renderLogs(v) {
       <td>${e.status != null ? `<span class="pill ${e.status < 300 ? 'ok' : e.status < 400 ? 'low' : 'high'}">${e.status}</span>` : ''}</td><td>${esc(short(e.ctype || '', 24))}</td><td class="num">${e.size != null ? fmtB(e.size) : ''}</td><td class="num">${e.latency != null ? Math.round(e.latency * 1000) + ' ms' : ''}</td></tr>`)) : '<div class="empty-note">Şifresiz HTTP isteği yok (HTTPS içeriği görünmez).</div>';
   } else if (S.logTab === 'tls') {
     const l = PL.tlsLog(A).filter(e => keep(e.no));
-    body = l.length ? table(['Zaman', 'İstemci', 'Site (SNI)', 'Sürüm', 'Şifre takımı', 'ALPN', 'Sertifika sahibi', '#El sıkışma', 'Not'], l.map(e => `<tr data-act="flow" data-v="${e.flow}"><td class="mono">${(e.t - t0).toFixed(3)}</td><td>${esc(nm(e.client))}</td><td>${esc(e.sni || nm(e.server))}</td>
-      <td>${e.version != null ? esc(PL.TLSV[e.version] || '?') : '<span class="muted">?</span>'}</td><td class="mono">${e.cipher != null ? esc(PL.cipherName(e.cipher)) : ''}</td><td>${esc(e.alpn.join(', '))}</td><td>${esc((e.cert && e.cert.subject) || '')}</td><td class="num">${e.hsMs != null ? Math.round(e.hsMs) + ' ms' : ''}</td><td>${e.weak.length ? `<span class="pill med" title="${esc(e.weak.join('; '))}">zayıf</span>` : ''}</td></tr>`)) : '<div class="empty-note">TLS el sıkışması yakalanmadı.</div>';
+    body = l.length ? table(['Zaman', 'İstemci', 'Site (SNI)', 'QUIC', 'ECH', 'JA3/JA4', 'Sürüm', 'Şifre', 'ALPN', 'Sertifika', '#El sık.', 'Not'], l.map(e => `<tr data-act="flow" data-v="${e.flow}"><td class="mono">${(e.t - t0).toFixed(3)}</td><td>${esc(nm(e.client))}</td><td>${esc(e.sni || nm(e.server))}</td>
+      <td>${e.quic ? '<span class="pill ok">QUIC</span>' : ''}</td><td>${e.ech ? '<span class="pill low">ECH</span>' : ''}</td>
+      <td class="mono small">${esc((e.ja4 || e.ja3Hash || '').slice(0, 22))}</td>
+      <td>${e.version != null ? esc(PL.TLSV[e.version] || '?') : '<span class="muted">?</span>'}</td><td class="mono">${e.cipher != null ? esc(PL.cipherName(e.cipher)) : ''}</td><td>${esc(e.alpn.join(', '))}</td>
+      <td class="small">${e.cert ? esc(short(e.cert.subject, 24)) + (e.cert.issuer ? '<br><span class="muted">' + esc(short(e.cert.issuer, 24)) + '</span>' : '') : ''}</td><td class="num">${e.hsMs != null ? Math.round(e.hsMs) + ' ms' : ''}</td><td>${e.weak.length ? `<span class="pill med" title="${esc(e.weak.join('; '))}">!</span>` : ''}</td></tr>`)) : '<div class="empty-note">TLS el sıkışması yakalanmadı.</div>';
   } else if (S.logTab === 'files') {
     body = X.extra.filesHTML ? X.extra.filesHTML() : '';
   } else {
@@ -235,7 +238,8 @@ function tlsHTML(f) {
   return `<h3>TLS ayrıntıları</h3><div class="card" style="padding:8px 12px;margin-bottom:12px"><table class="t kv"><tbody>
     ${row('Site (SNI)', esc(e.sni || ''))}${row('Sürüm', e.version != null ? esc(PL.TLSV[e.version] || '?') : '')}${row('Önerilen sürümler', e.offered.map(x => esc(PL.TLSV[x] || '?')).join(', '))}
     ${row('Şifre takımı', e.cipher != null ? '<span class="mono">' + esc(PL.cipherName(e.cipher)) + '</span>' : '')}${row('Önerilen şifre sayısı', e.ciphers.length ? String(e.ciphers.length) : '')}${row('ALPN', esc(e.alpn.join(', ')))}
-    ${row('Sertifika sahibi', e.cert ? esc(e.cert.subject) : '')}${row('Sertifikayı veren', e.cert ? esc(e.cert.issuer) : '')}${row('El sıkışma süresi', e.hsMs != null ? Math.round(e.hsMs) + ' ms' : '')}
+    ${row('Sertifika sahibi', e.cert ? esc(e.cert.subject) : '')}${row('Sertifikayı veren', e.cert ? esc(e.cert.issuer) : '')}${e.cert && e.cert.sans && e.cert.sans.length ? row('SAN', esc(e.cert.sans.slice(0, 6).join(', '))) : ''}${e.cert && e.cert.notAfter ? row('Geçerlilik bitiş', esc(e.cert.notAfter)) : ''}
+    ${row('JA3', esc(e.ja3Hash || ''))}${row('JA4', esc(e.ja4 || ''))}${row('ECH', e.ech ? 'evet' : 'hayır')}${row('QUIC', e.quic ? 'evet' : 'hayır')}${row('El sıkışma süresi', e.hsMs != null ? Math.round(e.hsMs) + ' ms' : '')}
     ${row('Uyarı', e.weak.length ? '<span class="pill med">' + esc(e.weak.join('; ')) + '</span>' : '')}</tbody></table></div>`;
 }
 

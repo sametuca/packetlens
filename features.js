@@ -99,6 +99,14 @@ document.addEventListener('change', setCtl);
 /* =============== SİTELER =============== */
 const SD = { dev: 'all' };
 function renderSites(v) {
+  try {
+    const mt = sessionStorage.getItem('pl-mitm-targets');
+    if (mt) {
+      sessionStorage.removeItem('pl-mitm-targets');
+      const ips = mt.split(/[,;\s]+/).map(s => s.trim()).filter(Boolean);
+      if (ips.length === 1) SD.dev = ips[0];
+    }
+  } catch (x) { /* yok say */ }
   const A = S.A, f = filtering(), nos = f ? new Set(S.vis.map(p => p.no)) : null;
   let rows = PL.sites(A, { flows: f ? S.visFlows : null, nos });
   const devs = new Map(); rows.forEach(r => devs.set(r.client, (devs.get(r.client) || 0) + 1));
@@ -114,23 +122,100 @@ function renderSites(v) {
 }
 
 /* =============== CİHAZLAR (YEREL AĞ) =============== */
+const DEV = { view: 'cards', scanNote: '', compare: null, filterKind: 'all' };
 function netCtx() {
   const live = S.live && (S.live.running || S.live.since > 0), n = live ? (S.net || {}) : {}, self = [];
   if (live && S.srv && S.srv.interfaces) S.srv.interfaces.forEach(i => { if (i.ipv4 && i.kind !== 'loopback') self.push(i.ipv4); });
-  return { gateway: n.gateway, dns: n.dns, arp: n.arp, self };
+  return { gateway: n.gateway, dns: n.dns, arp: n.arp, self, registry: S.deviceRegistry || [] };
+}
+function riskPill(r) {
+  if (r >= 60) return '<span class="pill bad">risk ' + r + '</span>';
+  if (r >= 25) return '<span class="pill med">risk ' + r + '</span>';
+  if (r > 0) return '<span class="pill low">risk ' + r + '</span>';
+  return '<span class="pill ok">risk 0</span>';
+}
+function portsLine(d) {
+  const seen = new Set();
+  const parts = [];
+  for (const x of (d.portsOpen || []).concat(d.scanPorts || []).concat((d.portsOut || []).map(p => ({ port: p.port, svc: p.svc })))) {
+    if (seen.has(x.port)) continue;
+    seen.add(x.port);
+    parts.push(x.port + (x.svc ? ' ' + x.svc : ''));
+    if (parts.length >= 8) break;
+  }
+  return parts.length ? parts.join(', ') : '—';
+}
+function deviceCard(d, A) {
+  const dn = (d.name && d.name !== d.ip) ? d.name : '';
+  const title = dn || d.ip;
+  return `<div class="dev-card" data-ip="${esc(d.ip)}">
+    <div class="dev-head"><b>${esc(short(title, 28))}</b>${riskPill(d.risk || 0)}</div>
+    <div class="mono muted small">${esc(d.ip)}${d.mac ? ' · ' + esc(d.mac) : ''}</div>
+    <div class="dev-meta">${esc(d.vendor || '—')}${d.mobilePlatform ? ' · <span class="pill ok">' + esc(d.mobileKind || 'mobil') + ' · ' + esc(d.mobilePlatform) + '</span>' : ''}${d.os ? ' · ' + esc(d.os) : ''}${d.dhcpClass ? '<br><span class="muted">DHCP: ' + esc(short(d.dhcpClass, 36)) + '</span>' : ''}${d.mobileHint ? '<br><span class="muted">' + esc(d.mobileHint) + (d.mobileConf ? ' (' + esc(d.mobileConf) + ')' : '') + '</span>' : ''}</div>
+    <div class="dev-roles">${d.roles.map(r => `<span class="pill ${r === 'Bu bilgisayar' ? 'ok' : r === 'Mobil cihaz' ? 'ok' : 'low'}">${esc(r)}</span>`).join(' ')}${d.silent ? ' <span class="pill low">sessiz</span>' : ''}</div>
+    <div class="muted small">Portlar: <span class="mono">${esc(portsLine(d))}</span></div>
+    ${d.riskTags && d.riskTags.length ? `<div class="muted small">${d.riskTags.map(t => '<span class="pill med">' + esc(t) + '</span>').join(' ')}</div>` : ''}
+    <div class="toolbar dev-actions">
+      <button class="btn sm" data-act="dev-watch" data-v="${esc(d.ip)}">Trafiği izle</button>
+      <button class="btn sm" data-act="dev-pt" data-v="${esc(d.ip)}">ptentes</button>
+      ${(d.problemIds && d.problemIds.length) ? `<button class="btn sm" data-act="dev-problems" data-v="${esc(d.ip)}">Sorunlar (${d.problemIds.length})</button>` : ''}
+    </div>
+    <div class="muted small">${d.flows ? d.flows + ' bağlantı · ' : ''}${d.last && A ? fmtD(d.last - A.t0) : ''}</div>
+  </div>`;
+}
+async function refreshDeviceRegistry() {
+  if (!X.api || location.protocol === 'file:') return;
+  try {
+    const { ok, j } = await X.api('/api/devices/registry');
+    if (ok && j && j.devices) S.deviceRegistry = j.devices;
+  } catch (e) { /* yok say */ }
 }
 function renderDevices(v) {
-  const A = S.A, D = PL.devices(A, netCtx()), l = D.devices;
-  const dn = d => (d.name && d.name !== d.ip ? d.name : '');
+  const A = S.A, D = PL.devices(A, netCtx());
+  const iso = (A && A.apIsolation) || (A && PL.detectApIsolation(A));
+  let l = D.devices;
+  if (DEV.filterKind === 'mobile') l = l.filter(d => d.mobile);
+  else if (DEV.filterKind === 'other') l = l.filter(d => !d.mobile);
+  const canScan = !!(S.srv && S.srv.root);
+  const iface = S.set.iface || (S.srv && S.srv.default_iface) || 'any';
   v.innerHTML = `<div class="grid g3" style="margin-bottom:12px">
-      <div class="kpi"><div class="v">${l.length}</div><div class="l">${T('yerel cihaz')}${D.subnet ? ' · ' + esc(D.subnet) : ''}</div></div>
+      <div class="kpi"><div class="v">${l.length}</div><div class="l">${T('yerel cihaz')}${D.mobileCount != null ? ' · ' + D.mobileCount + ' mobil' : ''}${D.subnet ? ' · ' + esc(D.subnet) : ''}</div></div>
       <div class="kpi"><div class="v mono" style="font-size:18px">${esc(D.gateway || '—')}</div><div class="l">${T('Ağ geçidi (router)')}${D.gatewayMac ? ' · ' + esc(D.gatewayMac) : ''}</div></div>
       <div class="kpi"><div class="v mono" style="font-size:18px">${esc(D.dns.slice(0, 2).join(', ') || '—')}</div><div class="l">${T('DNS sunucusu')}</div></div></div>
-    <div class="muted small" style="margin-bottom:8px">Cihazlar yakalanan trafikten (kaynak MAC/IP, ARP, DNS) ve canlı analizde bu bilgisayarın ARP tablosundan çıkarılır. Üretici adı MAC önekinden tahmin edilir; rastgele (gizlilik) MAC adreslerinde üretici bilinemez.</div>
-    ${l.length ? table(['Cihaz', 'MAC', 'Üretici', 'Rol', 'İşletim sistemi (tahmin)', '#Gönderdi', '#Aldı', '#Bağlantı', 'Uygulamalar', '#Son görülme'], l.map(d => `<tr data-act="try" data-v="${esc(d.ip)}"><td><span class="mono">${esc(d.ip)}</span>${dn(d) ? '<br><span class="muted small">' + esc(short(dn(d), 40)) + '</span>' : ''}</td><td class="mono">${esc(d.mac || '—')}</td><td>${esc(d.vendor || '—')}</td>
-      <td>${d.roles.map(r => `<span class="pill ${r === 'Bu bilgisayar' ? 'ok' : 'low'}">${esc(r)}</span>`).join(' ') || '—'}${d.silent ? ' <span class="pill low" title="Yakalamada trafiği yok; yalnızca ARP tablosunda">sessiz</span>' : ''}</td><td>${esc(d.os || '—')}</td>
-      <td class="num">${fmtB(d.bytesTx)}</td><td class="num">${fmtB(d.bytesRx)}</td><td class="num">${d.flows}</td><td>${esc(d.apps.join(', ') || '—')}</td><td class="num">${d.last ? fmtD(d.last - A.t0) : '—'}</td></tr>`))
-      : '<div class="empty-note">Bu yakalamada yerel cihaz bulunamadı.</div>'}`;
+    <div class="toolbar" style="margin-bottom:10px">
+      <button class="chip ${DEV.view === 'cards' ? 'on' : ''}" data-act="dev-view" data-v="cards">Kartlar</button>
+      <button class="chip ${DEV.view === 'table' ? 'on' : ''}" data-act="dev-view" data-v="table">Tablo</button>
+      <button class="chip ${DEV.filterKind === 'all' ? 'on' : ''}" data-act="dev-kind" data-v="all">Tümü</button>
+      <button class="chip ${DEV.filterKind === 'mobile' ? 'on' : ''}" data-act="dev-kind" data-v="mobile">Yalnızca mobil</button>
+      <button class="chip ${DEV.filterKind === 'other' ? 'on' : ''}" data-act="dev-kind" data-v="other">Mobil değil</button>
+      <button class="btn sm" data-act="dev-scan" data-v="arp" ${canScan ? '' : 'disabled'}>ARP tara</button>
+      <button class="btn sm" data-act="dev-scan" data-v="ping" ${canScan ? '' : 'disabled'}>Ping tara</button>
+      <button class="btn sm" data-act="dev-scan" data-v="ports" ${canScan ? '' : 'disabled'}>Port tara</button>
+      <button class="btn sm ghost" data-act="dev-refresh">Kayıt yenile</button>
+      <button class="btn sm ghost" data-act="dev-compare">Taramaları karşılaştır</button>
+      <span class="muted small">|</span>
+      <button class="btn sm ghost" data-act="pb-newdev">Playbook: yeni cihaz</button>
+      <button class="btn sm ghost" data-act="pb-suspicious">Playbook: şüpheli trafik</button>
+      <button class="btn sm ghost" data-act="pb-mobile">Playbook: mobil cihazlar</button>
+      <button class="btn sm ghost" data-act="dev-mobile-csv">Mobil rapor .csv</button>
+      ${DEV.scanNote ? `<span class="muted small">${esc(DEV.scanNote)}</span>` : ''}
+    </div>
+    ${iso && iso.likely ? `<div class="card" style="margin-bottom:10px;border-left:4px solid #b54708"><b>Olası AP izolasyonu</b> (${esc(iso.confidence || '—')} güven)
+      <p class="muted small" style="margin:6px 0 0">${esc(iso.hint || '')} <a href="#" data-act="pb-apiso">Sorunlar’da aç</a></p></div>` : ''}
+    ${DEV.compare && DEV.compare.ok ? `<div class="card" style="margin-bottom:10px"><h3>Tarama farkı</h3>
+      <div class="muted small">Yeni: ${esc((DEV.compare.new || []).join(', ') || '—')} · Kayboldu: ${esc((DEV.compare.gone || []).join(', ') || '—')}</div>
+      ${(DEV.compare.changed || []).length ? `<ul class="muted small">${DEV.compare.changed.map(c => `<li>${esc(c.ip)} port +${esc((c.ports_added||[]).join(','))} −${esc((c.ports_removed||[]).join(','))}</li>`).join('')}</ul>` : ''}</div>` : ''}
+    <div class="muted small" style="margin-bottom:8px">Mobil cihazlar genelde mDNS adı (<span class="mono">iPhone</span>, <span class="mono">Android</span>), DHCP sınıfı, Apple/Samsung/Google MAC üreticisi, QUIC trafiği ve gizli (rastgele) MAC ile tanınır. Çoğu uygulama trafiği HTTPS/QUIC olduğu için içerik okunmaz; <b>Siteler</b> sekmesinde hangi alan adlarına gidildiği görülür.</div>
+    ${l.length ? (DEV.view === 'table' ? table(['Cihaz', 'MAC', 'Üretici', 'Risk', 'Portlar', 'Rol', 'OS', 'İşlem'], l.map(d => {
+      const dn = d.name && d.name !== d.ip ? d.name : '';
+      return `<tr><td><span class="mono">${esc(d.ip)}</span>${dn ? '<br><span class="muted small">' + esc(short(dn, 40)) + '</span>' : ''}</td><td class="mono">${esc(d.mac || '—')}</td><td>${esc(d.vendor || '—')}</td><td>${riskPill(d.risk || 0)}</td><td class="mono small">${esc(portsLine(d))}</td>
+        <td>${d.roles.map(r => `<span class="pill low">${esc(r)}</span>`).join(' ') || '—'}</td><td>${esc(d.os || '—')}</td>
+        <td><button class="btn sm" data-act="dev-watch" data-v="${esc(d.ip)}">İzle</button> <button class="btn sm" data-act="dev-pt" data-v="${esc(d.ip)}">ptentes</button></td></tr>`;
+    })) : `<div class="dev-grid">${l.map(d => deviceCard(d, A)).join('')}</div>`)
+      : '<div class="empty-note">Bu yakalamada yerel cihaz bulunamadı. Canlı modda ARP taraması deneyin.</div>'}`;
+  if (canScan && !S.deviceRegistry.length) refreshDeviceRegistry().then(() => { if (S.tab === 'devices') renderDevices(v); });
+  if (PL.loadOui) PL.loadOui();
+  if (window.PLI) window.PLI.apply(v);
 }
 
 /* =============== HTTP DOSYALARI =============== */
@@ -222,9 +307,29 @@ function csvData(kind) {
     PL.sites(A, { flows: filtering() ? S.visFlows : null }).map(r => [r.domain, r.client, r.apps.join('|'), r.flows, r.bytes, r.dnsQ, r.via.join('|'), isFinite(r.first) ? (r.first - t0).toFixed(3) : '', r.last ? (r.last - t0).toFixed(3) : '', r.clear ? 'yes' : 'no'])];
   if (kind === 'dns') return ['dns', ['time_s', 'client', 'query', 'type', 'rcode', 'answers', 'latency_ms'], PL.dnsLog(A).map(e => [(e.t - t0).toFixed(3), e.client, e.name, PL.QTYPE[e.qtype] || e.qtype, e.rcode == null ? '' : e.rcode, e.answers.join('|'), e.latency != null ? Math.round(e.latency * 1000) : ''])];
   if (kind === 'http') return ['http', ['time_s', 'client', 'host', 'method', 'path', 'status', 'content_type', 'size'], PL.httpLog(A).map(e => [(e.t - t0).toFixed(3), e.client, e.host, e.method, e.path, e.status == null ? '' : e.status, e.ctype || '', e.size == null ? '' : e.size])];
-  if (kind === 'tls') return ['tls', ['time_s', 'client', 'sni', 'version', 'cipher', 'alpn', 'cert_subject'], PL.tlsLog(A).map(e => [(e.t - t0).toFixed(3), e.client, e.sni || '', e.version != null ? (PL.TLSV[e.version] || '') : '', e.cipher != null ? PL.cipherName(e.cipher) : '', e.alpn.join('|'), (e.cert && e.cert.subject) || ''])];
+  if (kind === 'tls') return ['tls', ['time_s', 'client', 'sni', 'quic', 'ech', 'ja3', 'ja4', 'version', 'cipher', 'alpn', 'cert_subject', 'cert_issuer', 'cert_sans'],
+    PL.tlsLog(A).map(e => [(e.t - t0).toFixed(3), e.client, e.sni || '', e.quic ? 'yes' : 'no', e.ech ? 'yes' : 'no', e.ja3Hash || '', e.ja4 || '',
+      e.version != null ? (PL.TLSV[e.version] || '') : '', e.cipher != null ? PL.cipherName(e.cipher) : '', e.alpn.join('|'),
+      (e.cert && e.cert.subject) || '', (e.cert && e.cert.issuer) || '', (e.cert && e.cert.sans) ? e.cert.sans.join('|') : ''])];
+  if (kind === 'devices') {
+    const D = PL.devices(A, netCtx());
+    return ['devices', ['ip', 'name', 'mac', 'vendor', 'mobile', 'mobile_kind', 'mobile_platform', 'mobile_confidence', 'os', 'roles', 'bytes_tx', 'bytes_rx', 'flows', 'risk', 'dhcp_class', 'user_agent'],
+      D.devices.map(d => {
+        const h = A.hosts.get(d.ip);
+        return [d.ip, d.name, d.mac, d.vendor, d.mobile ? 'yes' : 'no', d.mobileKind, d.mobilePlatform, d.mobileConf, d.os, d.roles.join('|'), d.bytesTx, d.bytesRx, d.flows, d.risk, d.dhcpClass, (h && h.userAgent) || ''];
+      })];
+  }
+  if (kind === 'mobile-report') {
+    const R = PL.mobileDeviceReport(A, netCtx());
+    return ['mobile-report', ['ip', 'name', 'mac', 'vendor', 'platform', 'kind', 'confidence', 'bytes_total', 'flows', 'user_agent', 'top_sites', 'site_count'],
+      R.rows.map(r => {
+        const d = r.device;
+        return [d.ip, d.name, d.mac, d.vendor, d.mobilePlatform, d.mobileKind, d.mobileConf, d.bytesTx + d.bytesRx, d.flows, r.userAgent, r.siteSummary, r.topSites.length];
+      })];
+  }
   return null;
 }
+function exportMobileReport() { exportCSV('mobile-report'); }
 function exportCSV(kind) { const d = csvData(kind); if (!d) return; download(`packetlens-${d[0]}-${stamp()}.csv`, PL.toCSV(d[1], d[2]), 'text/csv;charset=utf-8'); toast(`${d[2].length} satır dışa aktarıldı`); }
 function exportJSON() {
   const A = S.A, t0 = A.t0, st = A.stats;
@@ -285,7 +390,7 @@ function openExport() {
       <div class="muted small">Not: yalnızca adres maskelenirse DNS yanıtlarındaki IP’ler ve içerik olduğu gibi kalır. Gerçekten paylaşmak için ikisini de seçin.</div>
       <div><button class="btn" data-act="fe-anon">Anonim .pcap kaydet</button></div></div>
     <div class="xrow col"><div><b>Tablo (CSV) ve JSON</b><div class="muted small">Excel / betikler için. Parolalar dışa aktarılmaz.</div></div>
-      <div class="toolbar">${[['packets', 'Paketler'], ['flows', 'Bağlantılar'], ['problems', 'Sorunlar'], ['devices', 'Cihazlar'], ['sites', 'Siteler'], ['dns', 'DNS'], ['http', 'HTTP'], ['tls', 'TLS']].map(([k, l]) => `<button class="btn sm" data-act="fe-csv" data-v="${k}">${l} .csv</button>`).join('')}<button class="btn sm" data-act="fe-json">Tüm analiz .json</button></div></div>`);
+      <div class="toolbar">${[['packets', 'Paketler'], ['flows', 'Bağlantılar'], ['problems', 'Sorunlar'], ['devices', 'Cihazlar'], ['mobile-report', 'Mobil rapor'], ['sites', 'Siteler'], ['dns', 'DNS'], ['http', 'HTTP'], ['tls', 'TLS']].map(([k, l]) => `<button class="btn sm" data-act="fe-csv" data-v="${k}">${l} .csv</button>`).join('')}<button class="btn sm" data-act="fe-json">Tüm analiz .json</button></div></div>`);
 }
 
 /* =============== TIKLAMA OLAYLARI =============== */
@@ -335,6 +440,90 @@ document.addEventListener('change', e => {
     } catch (x) { toast('Geçersiz ayar dosyası'); }
   };
   r.readAsText(e.target.files[0]); e.target.value = '';
+});
+
+async function runDeviceScan(mode) {
+  if (!X.api) { toast('Sunucu gerekli'); return; }
+  const iface = S.set.iface || (S.srv && S.srv.default_iface) || '';
+  if (!iface || iface === 'any') { toast('Ayarlar’dan yakalama arayüzü seçin'); return; }
+  DEV.scanNote = 'Taranıyor…'; if (S.tab === 'devices') renderDevices($('#view'));
+  const modes = mode === 'arp' ? ['arp'] : mode === 'ping' ? ['arp', 'ping'] : ['arp', 'ports'];
+  try {
+    const { ok, j } = await X.api('/api/devices/scan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ iface, modes }) });
+    if (!ok) { DEV.scanNote = j.error || 'Tarama başarısız'; toast(DEV.scanNote); }
+    else {
+      S.deviceRegistry = (j.registry && j.registry.devices) || j.found || [];
+      if (j.compare) DEV.compare = j.compare;
+      DEV.scanNote = (j.found || []).length + ' cihaz · ' + modes.join('+');
+      toast('Tarama tamam');
+      try { const { ok, j } = await X.api('/api/net'); if (ok) S.net = j; } catch (e2) { /* yok say */ }
+    }
+  } catch (e) { DEV.scanNote = 'Ağ hatası'; }
+  if (S.tab === 'devices') renderDevices($('#view'));
+}
+
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-act]'); if (!el) return;
+  const act = el.dataset.act;
+  if (act === 'dev-view') { DEV.view = el.dataset.v || 'cards'; if (S.tab === 'devices') renderDevices($('#view')); return; }
+  if (act === 'dev-kind') { DEV.filterKind = el.dataset.v || 'all'; if (S.tab === 'devices') renderDevices($('#view')); return; }
+  if (act === 'dev-scan') { e.preventDefault(); runDeviceScan(el.dataset.v); return; }
+  if (act === 'dev-refresh') { e.preventDefault(); refreshDeviceRegistry().then(() => { if (S.tab === 'devices') renderDevices($('#view')); toast('Kayıt güncellendi'); }); return; }
+  if (act === 'dev-watch') { e.preventDefault(); X.setQuery('ip.addr == ' + el.dataset.v); return; }
+  if (act === 'dev-pt') {
+    e.preventDefault();
+    try { sessionStorage.setItem('pl-pt-targets', el.dataset.v || ''); } catch (x) { /* yok say */ }
+    S.mode = 'adv'; try { localStorage.setItem('pl-mode', 'adv'); } catch (x) { /* yok say */ }
+    S.tab = 'ptentes'; $('#empty').hidden = true; $('#app').hidden = false; X.render(); return;
+  }
+  if (act === 'dev-problems') {
+    e.preventDefault();
+    const ip = el.dataset.v;
+    S.tab = 'problems'; S.probCat = 'all';
+    S._devProbIp = ip;
+    X.render();
+    return;
+  }
+  if (act === 'dev-compare') {
+    e.preventDefault();
+    if (!X.api) return;
+    X.api('/api/devices/compare?a=-2&b=-1').then(({ ok, j }) => {
+      DEV.compare = ok ? j : { ok: false, error: j.error };
+      if (S.tab === 'devices') renderDevices($('#view'));
+    });
+    return;
+  }
+  if (act === 'pb-newdev') { e.preventDefault(); runDeviceScan('arp'); return; }
+  if (act === 'pb-suspicious') {
+    e.preventDefault();
+    X.setQuery('pl.problem');
+    S.tab = 'problems';
+    X.render();
+    return;
+  }
+  if (act === 'pb-mobile') {
+    e.preventDefault();
+    DEV.filterKind = 'mobile';
+    S.tab = 'devices';
+    if (!S.A) { toast('Önce yakalama veya canlı analiz başlatın'); return; }
+    X.render();
+    return;
+  }
+  if (act === 'dev-mobile-csv') {
+    e.preventDefault();
+    if (!S.A || !S.pk.length) { toast('Önce bir yakalama açın'); return; }
+    exportCSV('mobile-report');
+    return;
+  }
+  if (act === 'pb-apiso') {
+    e.preventDefault();
+    S.tab = 'problems';
+    S.probCat = 'net';
+    S._devProbIp = null;
+    X.render();
+    toast('AP izolasyonu ve captive portal uyarıları “Ağ / bağlantı” listesinde');
+    return;
+  }
 });
 
 Object.assign(X.views, { settings: renderSettings, sites: renderSites, devices: renderDevices });

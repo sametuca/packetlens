@@ -9,7 +9,7 @@ const TOKEN = new URLSearchParams(location.search).get('t');
 const DEFAULTS = { lang: 'tr', theme: 'auto', density: 'normal', timefmt: 'rel', names: true,
   dnsSlow: 250, rttSlow: 150, retransMed: 3, scanTargets: 15, tunnelSubs: 15, dgaNames: 20, sweepHosts: 15, off: [],
   iface: '', capfilter: '', snap: 1600, max: 300000, duration: 0, promisc: true, follow: true, presets: [] };
-S.set = Object.assign({}, DEFAULTS); S.notes = {}; S.find = null; S.liveOpen = false;
+S.set = Object.assign({}, DEFAULTS); S.notes = {}; S.find = null; S.liveOpen = false; S.deviceRegistry = [];
 try { const j = JSON.parse(localStorage.getItem('pl-settings') || 'null'); if (j && typeof j === 'object') Object.assign(S.set, j); } catch (e) { /* yok say */ }
 if (!S.set.lang || !['tr', 'en'].includes(S.set.lang)) { try { S.set.lang = /^tr/i.test(navigator.language || '') ? 'tr' : 'en'; } catch (e) { S.set.lang = 'tr'; } }
 try { const m = localStorage.getItem('pl-mode'); if (m === 'adv' || m === 'simple') S.mode = m; } catch (e) { /* yok say */ }
@@ -256,15 +256,17 @@ function probHTML(pr) {
     <div class="muted small">${(pr.ts - S.A.t0).toFixed(2)}. saniye · ${pr.pkts.length} paket${pr.flow ? ' · bağlantı #' + pr.flow : ''}</div></div>
     <div><button class="btn sm" data-act="probpk" data-v="${pr.id}">Paketleri göster</button></div></div>`;
 }
-const SEC = new Set(['scan', 'cred', 'arp', 'dnstunnel', 'dga', 'beacon', 'sweep', 'synflood', 'weaktls', 'clear']);
+const SEC = new Set(['scan', 'cred', 'arp', 'dnstunnel', 'dga', 'beacon', 'sweep', 'synflood', 'weaktls', 'clear', 'certanom']);
 const PERF = new Set(['retrans', 'zerowin', 'slowrtt', 'dnsslow']);
 const catOf = t => SEC.has(t) ? 'sec' : PERF.has(t) ? 'perf' : 'net';
 function renderProblems(v) {
   let l = S.A.problems;
+  if (S._devProbIp && PL.problemsForIp) l = PL.problemsForIp(S.A, S._devProbIp);
   if (S.query && S.query.test || S.flowFilter || S.pktSet || S.timeRange) { const nos = new Set(S.vis.map(p => p.no)); l = l.filter(pr => pr.pkts.some(n => nos.has(n))); }
   const cnt = { all: l.length, sec: 0, perf: 0, net: 0 }; l.forEach(pr => cnt[catOf(pr.type)]++);
   const shown = S.probCat === 'all' ? l : l.filter(pr => catOf(pr.type) === S.probCat);
-  v.innerHTML = `<div class="toolbar">${[['all', 'Hepsi'], ['sec', 'Güvenlik'], ['perf', 'Performans'], ['net', 'Ağ / bağlantı']].map(([k, t]) => `<button class="chip ${S.probCat === k ? 'on' : ''}" data-act="probcat" data-v="${k}">${t} (${cnt[k]})</button>`).join('')}</div>` +
+  const devChip = S._devProbIp ? `<button class="chip on" data-act="clrdevprob">Cihaz: ${esc(S._devProbIp)} ✕</button>` : '';
+  v.innerHTML = `<div class="toolbar">${devChip}${[['all', 'Hepsi'], ['sec', 'Güvenlik'], ['perf', 'Performans'], ['net', 'Ağ / bağlantı']].map(([k, t]) => `<button class="chip ${S.probCat === k ? 'on' : ''}" data-act="probcat" data-v="${k}">${t} (${cnt[k]})</button>`).join('')}</div>` +
     (shown.length ? shown.map(probHTML).join('') : `<div class="empty-note">${S.A.problems.length ? 'Bu filtreyle eşleşen sorun yok.' : '✓ Bu yakalamada sorun bulunamadı.'}</div>`);
 }
 
@@ -384,7 +386,7 @@ async function initServer() {
   if (!TOKEN || location.protocol === 'file:') return;
   try {
     const { ok, j } = await api('/api/info'); if (!ok) return;
-    S.srv = j; await loadNet(); renderLivebar();
+    S.srv = j; await loadNet(); if (PL.loadOui) PL.loadOui(); renderLivebar();
     $('#live-hint').textContent = j.capture ? (j.root ? 'Canlı analiz hazır: “▶ Analiz et” düğmesine basın.' : 'Canlı analiz için programı sudo ile başlatın (şu an root değil).') : 'Canlı yakalama kapalı (--no-capture).';
   if (window.PLApp && window.PLApp.checkUpdate) window.PLApp.checkUpdate(j.commit);
   } catch (e) { /* sunucu yok: sadece dosya modu */ }
@@ -503,6 +505,7 @@ document.addEventListener('click', e => {
     case 'expl': { const x = el.parentElement.querySelector('.expl'); if (x) x.hidden = !x.hidden; break; }
     case 'cleartime': S.timeRange = null; computeVisible(); render(); break;
     case 'probcat': S.probCat = v; render(); break;
+    case 'clrdevprob': S._devProbIp = null; render(); break;
     case 'closedr': closeDrawer(); break;
     case 'livestart': liveStart(); break;
     case 'livestop': liveStop(); break;

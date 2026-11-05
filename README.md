@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/header.jpg" alt="PacketLens — Real-Time Packet Capture & Network Analysis" width="100%">
+</p>
+
 # PacketLens
 
 **English** · [Türkçe](README.tr.md)

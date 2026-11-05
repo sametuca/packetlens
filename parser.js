@@ -19,8 +19,8 @@ const ascii = (v, s, e) => { let r = ''; for (let i = s; i < e && i < v.length; 
 const PROTO = { 1: 'ICMP', 2: 'IGMP', 6: 'TCP', 17: 'UDP', 47: 'GRE', 50: 'ESP', 58: 'ICMPv6', 89: 'OSPF', 132: 'SCTP' };
 const protoName = n => PROTO[n] || ('IP/' + n);
 const ETYPE = { 0x0800: 'IPv4', 0x0806: 'ARP', 0x86dd: 'IPv6', 0x8100: 'VLAN', 0x88cc: 'LLDP' };
-const SVC_TCP = { 20: 'FTP', 21: 'FTP', 22: 'SSH', 23: 'Telnet', 25: 'SMTP', 53: 'DNS', 80: 'HTTP', 110: 'POP3', 143: 'IMAP', 443: 'HTTPS (TLS)', 445: 'SMB', 465: 'SMTP', 587: 'SMTP', 993: 'IMAP', 995: 'POP3', 3306: 'MySQL', 3389: 'RDP', 5432: 'PostgreSQL', 8080: 'HTTP', 8443: 'HTTPS (TLS)' };
-const SVC_UDP = { 53: 'DNS', 67: 'DHCP', 68: 'DHCP', 123: 'NTP', 137: 'NetBIOS', 138: 'NetBIOS', 443: 'QUIC', 1900: 'SSDP', 5353: 'mDNS', 5355: 'LLMNR' };
+const SVC_TCP = { 20: 'FTP', 21: 'FTP', 22: 'SSH', 23: 'Telnet', 25: 'SMTP', 53: 'DNS', 80: 'HTTP', 88: 'Kerberos', 110: 'POP3', 143: 'IMAP', 443: 'HTTPS (TLS)', 445: 'SMB', 465: 'SMTP', 587: 'SMTP', 993: 'IMAP', 995: 'POP3', 1883: 'MQTT', 3306: 'MySQL', 3389: 'RDP', 5432: 'PostgreSQL', 5683: 'CoAP', 5985: 'WinRM', 8080: 'HTTP', 8443: 'HTTPS (TLS)' };
+const SVC_UDP = { 53: 'DNS', 67: 'DHCP', 68: 'DHCP', 88: 'Kerberos', 123: 'NTP', 137: 'NetBIOS', 138: 'NetBIOS', 443: 'QUIC', 502: 'Modbus', 1900: 'SSDP', 5353: 'mDNS', 5355: 'LLMNR', 5683: 'CoAP', 1883: 'MQTT' };
 const QTYPE = { 1: 'A', 2: 'NS', 5: 'CNAME', 12: 'PTR', 15: 'MX', 16: 'TXT', 28: 'AAAA', 33: 'SRV', 65: 'HTTPS', 255: 'ANY' };
 const RCODE = { 0: 'NOERROR', 1: 'FORMERR', 2: 'SERVFAIL', 3: 'NXDOMAIN', 4: 'NOTIMP', 5: 'REFUSED' };
 const ICMP_T = { 0: 'Echo yanıtı (ping cevabı)', 3: 'Hedefe ulaşılamadı', 5: 'Yönlendirme', 8: 'Echo isteği (ping)', 11: 'Zaman aşımı (TTL doldu)' };
@@ -174,12 +174,12 @@ function sniffTCP(p, v, po, end) {
   if (/^(GET|POST|HEAD|PUT|DELETE|OPTIONS|PATCH|CONNECT) /.test(head) || head.startsWith('HTTP/1.')) {
     const txt = ascii(v, po, Math.min(end, po + 2048)).replace(/\./g, c => c);
     const raw = String.fromCharCode.apply(null, Array.from(v.subarray(po, Math.min(end, po + 2048)))).split('\r\n');
-    const first = raw[0].replace(/[^\x20-\x7e]/g, '.'); let host = null, ctype = null, clen = null;
-    for (let i = 1; i < raw.length && raw[i]; i++) { const m = /^([^:]+):\s*(.*)$/.exec(raw[i]); if (!m) continue; const k = m[1].toLowerCase(); if (k === 'host') host = m[2]; if (k === 'content-type') ctype = m[2]; if (k === 'content-length') clen = +m[2]; }
+    const first = raw[0].replace(/[^\x20-\x7e]/g, '.'); let host = null, ctype = null, clen = null, userAgent = null;
+    for (let i = 1; i < raw.length && raw[i]; i++) { const m = /^([^:]+):\s*(.*)$/.exec(raw[i]); if (!m) continue; const k = m[1].toLowerCase(); if (k === 'host') host = m[2]; if (k === 'content-type') ctype = m[2]; if (k === 'content-length') clen = +m[2]; if (k === 'user-agent') userAgent = m[2].trim(); }
     if (host) host = host.replace(/:\d+$/, '');
     const rq = /^([A-Z]+) (\S+) HTTP/.exec(first), rs = /^HTTP\/[\d.]+ (\d{3})/.exec(first);
-    p.http = { first, host, ctype, clen, method: rq ? rq[1] : null, path: rq ? rq[2] : null, status: rs ? +rs[1] : null }; p.app = 'HTTP'; p.appSure = true;
-    p.layers.push({ name: 'HTTP', fields: [['İlk satır', first]].concat(host ? [['Host', host]] : [], ctype ? [['İçerik türü', ctype]] : []) });
+    p.http = { first, host, ctype, clen, userAgent, method: rq ? rq[1] : null, path: rq ? rq[2] : null, status: rs ? +rs[1] : null }; p.app = 'HTTP'; p.appSure = true;
+    p.layers.push({ name: 'HTTP', fields: [['İlk satır', first]].concat(host ? [['Host', host]] : [], userAgent ? [['User-Agent', userAgent.slice(0, 120)]] : [], ctype ? [['İçerik türü', ctype]] : []) });
     p.info = first + (host ? '  (Host: ' + host + ')' : ''); return;
   }
   const t = ascii(v, po, Math.min(end, po + 4));
@@ -191,6 +191,33 @@ const CIPHERS = { 0x1301: 'TLS_AES_128_GCM_SHA256', 0x1302: 'TLS_AES_256_GCM_SHA
 const WEAK_CIPHERS = new Set([0x000a, 0x0005]);
 const isGrease = x => (x & 0x0f0f) === 0x0a0a && (x >> 8) === (x & 0xff);
 const cipherName = c => CIPHERS[c] || ('0x' + c.toString(16).padStart(4, '0'));
+const ja3Digest = s => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0; return h.toString(16).padStart(8, '0'); };
+function ja3FromClientHello(v, po, end) {
+  try {
+    if (API.parseTlsClientHelloAt) return API.parseTlsClientHelloAt(v, po, end);
+    if (end - po < 44 || v[po] !== 22 || v[po + 5] !== 1) return null;
+    const rec = u16(v, po + 3), q = po + 5, qend = Math.min(end, q + rec);
+    if (qend - q < 38 || v[q] !== 1) return null;
+    let o = q + 4 + 2 + 32;
+    o += 1 + v[o];
+    const cl = u16(v, o); o += 2;
+    const ciphers = [];
+    for (let i = o; i + 1 < o + cl && i + 1 < qend; i += 2) { const c = u16(v, i); if (!isGrease(c)) ciphers.push(c); }
+    o += cl;
+    const cm = v[o]; o += 1 + cm;
+    const extLen = u16(v, o); o += 2;
+    const extensions = [];
+    const eend = Math.min(qend, o + extLen);
+    while (o + 4 <= eend) { const et = u16(v, o); if (!isGrease(et)) extensions.push(et); o += 4 + u16(v, o + 2); }
+    const tlsLegacy = u16(v, q + 1);
+    const ja3 = [tlsLegacy, ciphers.join('-'), extensions.join('-')].join(',');
+    return { ja3, ja3Hash: ja3Digest(ja3) };
+  } catch (e) { return null; }
+}
+const DHCP_FP = { '1,3,6,15,31,33,43,44,46,47,119,121,249,252': 'Windows', '1,121,3,6,15,119,252': 'macOS/iOS', '1,3,6,15,26,28,51,58,59': 'Android/Linux' };
+function dhcpFpLabel(list) {
+  const k = (list || []).join(','); return DHCP_FP[k] || (list && list.length ? 'parm(' + list.slice(0, 6).join(',') + '…)' : '');
+}
 
 function dTLS(p, v, po, end) {
   const rt = v[po], ver = u16(v, po + 1), rl = u16(v, po + 3);
@@ -205,25 +232,20 @@ function dTLS(p, v, po, end) {
     p.info = 'TLS ' + (HT[ht] || 'Handshake');
     try {
       if (ht === 1) {
-        let q = po + 43; q += 1 + v[q];
-        const cl = u16(v, q), ciphers = [];
-        for (let i = q + 2; i < q + 2 + cl && i + 1 < end; i += 2) { const c = u16(v, i); if (!isGrease(c)) ciphers.push(c); }
-        q += 2 + cl; q += 1 + v[q];
-        const eend = Math.min(end, q + 2 + u16(v, q)); q += 2;
-        const versions = [], alpn = [];
-        while (q + 4 <= eend) {
-          const et = u16(v, q), el = u16(v, q + 2);
-          if (et === 0 && el > 5) { const nl = u16(v, q + 7); p.sni = ascii(v, q + 9, q + 9 + nl); }
-          else if (et === 43 && el >= 3) { const l = v[q + 4]; for (let i = q + 5; i < q + 5 + l && i + 1 < end; i += 2) { const x = u16(v, i); if (!isGrease(x)) versions.push(x); } }
-          else if (et === 16 && el >= 3) { const ll = u16(v, q + 4); let i = q + 6; while (i < q + 6 + ll && i < end) { const n = v[i]; alpn.push(ascii(v, i + 1, i + 1 + n)); i += 1 + n; } }
-          q += 4 + el;
+        const ch = ja3FromClientHello(v, po, end);
+        if (ch) {
+          tls.ciphers = ch.ciphers || []; tls.versions = ch.versions || []; tls.alpn = ch.alpn || []; tls.legacy = ch.legacy;
+          tls.ja3 = ch.ja3; tls.ja3Hash = ch.ja3Hash; tls.ja4 = ch.ja4; tls.ech = ch.ech;
+          if (ch.sni) p.sni = ch.sni;
+          if (ch.ja3Hash) f.push(['JA3 (MD5)', ch.ja3Hash]);
+          if (ch.ja4) f.push(['JA4', ch.ja4]);
+          if (ch.ech) f.push(['ECH', 'Encrypted Client Hello (iç SNI gizli olabilir)']);
         }
-        tls.ciphers = ciphers; tls.versions = versions; tls.alpn = alpn; tls.legacy = u16(v, po + 9);
         if (p.sni) { f.push(['Sunucu adı (SNI)', p.sni]); p.info += ' → ' + p.sni; }
-        if (versions.length) f.push(['Önerilen sürümler', versions.map(x => TLSV[x] || '0x' + x.toString(16)).join(', ')]);
-        else f.push(['Önerilen sürümler', TLSV[tls.legacy] || '?']);
-        if (ciphers.length) f.push(['Şifre takımları', ciphers.length + ' adet: ' + ciphers.slice(0, 4).map(cipherName).join(', ') + (ciphers.length > 4 ? ' …' : '')]);
-        if (alpn.length) f.push(['ALPN (uygulama protokolü)', alpn.join(', ')]);
+        if (tls.versions && tls.versions.length) f.push(['Önerilen sürümler', tls.versions.map(x => TLSV[x] || '0x' + x.toString(16)).join(', ')]);
+        else if (tls.legacy) f.push(['Önerilen sürümler', TLSV[tls.legacy] || '?']);
+        if (tls.ciphers && tls.ciphers.length) f.push(['Şifre takımları', tls.ciphers.length + ' adet: ' + tls.ciphers.slice(0, 4).map(cipherName).join(', ') + (tls.ciphers.length > 4 ? ' …' : '')]);
+        if (tls.alpn && tls.alpn.length) f.push(['ALPN (uygulama protokolü)', tls.alpn.join(', ')]);
       } else if (ht === 2) {
         let q = po + 43; q += 1 + v[q];
         const cs = u16(v, q); q += 3;
@@ -236,13 +258,13 @@ function dTLS(p, v, po, end) {
         f.push(['Seçilen sürüm', TLSV[sv] || '0x' + sv.toString(16)], ['Seçilen şifre takımı', cipherName(cs)]);
         p.info += ' (' + (TLSV[sv] || '?') + ', ' + cipherName(cs) + ')';
       } else if (ht === 11 && end - po > 16) {
-        const cl = (v[po + 12] << 16) | (v[po + 13] << 8) | v[po + 14], cs = po + 15, ce = Math.min(end, cs + cl), cns = [];
-        for (let i = cs; i + 5 < ce; i++) {
-          if (v[i] === 0x55 && v[i + 1] === 4 && v[i + 2] === 3 && (v[i + 3] === 0x0c || v[i + 3] === 0x13 || v[i + 3] === 0x16)) {
-            const n = v[i + 4]; if (n < 128 && i + 5 + n <= ce) { cns.push(ascii(v, i + 5, i + 5 + n)); i += 4 + n; }
-          }
+        const cert = API.parseCertHandshake ? API.parseCertHandshake(v, po, end) : null;
+        if (cert) {
+          tls.cert = cert;
+          f.push(['Sertifika sahibi', cert.subject], ['Sertifikayı veren', cert.issuer]);
+          if (cert.sans && cert.sans.length) f.push(['SAN', cert.sans.slice(0, 8).join(', ') + (cert.sans.length > 8 ? ' …' : '')]);
+          if (cert.notAfter) f.push(['Geçerlilik bitiş', cert.notAfter]);
         }
-        if (cns.length) { tls.cert = { issuer: cns[0], subject: cns.length > 1 ? cns[1] : cns[0] }; f.push(['Sertifika sahibi', tls.cert.subject], ['Sertifikayı veren', tls.cert.issuer]); }
       }
     } catch (e) { /* ayrıntı okunamadı */ }
   } else if (rt === 23) p.info = 'TLS şifreli uygulama verisi (' + rl + ' bayt)';
@@ -259,7 +281,59 @@ function dUDP(p, v, o, end) {
   p.info = `${sp} → ${dp} Len=${p.payloadLen}`;
   if ((p.app === 'DNS' || p.app === 'mDNS' || p.app === 'LLMNR') && p.payloadLen >= 12) {
     try { dDNS(p, v, po, end); } catch (e) { p.info += ' (DNS çözülemedi)'; }
-  } else if (p.app === 'QUIC') p.info = 'QUIC şifreli trafik (' + p.payloadLen + ' bayt)';
+  } else if (p.app === 'DHCP' && p.payloadLen >= 240) {
+    try { dDHCP(p, v, po, end); } catch (e) { /* yok say */ }
+  } else if (p.app === 'NetBIOS' && p.payloadLen >= 12) {
+    try { dNBNS(p, v, po, end); } catch (e) { /* yok say */ }
+  } else if (p.app === 'QUIC') {
+    p.info = 'QUIC trafik (' + p.payloadLen + ' bayt)';
+    p.quic = { long: p.payloadLen >= 5 && v[po] >= 0xc0 };
+    const ch = API.scanTlsClientHello && API.scanTlsClientHello(v, po, end);
+    if (ch) {
+      p.quic.sni = ch.sni; p.quic.ech = ch.ech; p.quic.ja3Hash = ch.ja3Hash; p.quic.ja4 = ch.ja4;
+      if (ch.ja4) p.quic.ja4 = 'q' + ch.ja4.slice(1);
+      if (ch.sni) { p.sni = ch.sni; p.info = 'QUIC → ' + ch.sni; }
+      if (ch.ech) p.info += ' (ECH)';
+      p.layers.push({ name: 'QUIC TLS', fields: [['SNI', ch.sni || '—'], ['JA3', ch.ja3Hash || '—'], ['JA4', ch.ja4 || '—'], ['ECH', ch.ech ? 'evet' : 'hayır']] });
+    }
+  }
+}
+
+function dNBNS(p, v, po, end) {
+  if (end - po < 12) return;
+  const qr = (u16(v, po + 2) >> 15) & 1;
+  if (!qr) return;
+  for (let i = po + 12; i + 32 < end; i++) {
+    if (v[i] === 0x20 && v[i + 1] === 0x43 && v[i + 2] === 0x41) {
+      let name = '';
+      for (let j = i + 1; j + 1 < end && j < i + 34; j += 2) {
+        const c = v[j]; if (c < 32 || c > 126) break; name += String.fromCharCode(c);
+      }
+      name = name.replace(/\s+$/, '').split(' ')[0];
+      if (name.length >= 2) { p.nbns = { name }; p.info = 'NetBIOS adı: ' + name; }
+      break;
+    }
+  }
+}
+
+function dDHCP(p, v, po, end) {
+  if (end - po < 240) return;
+  const op = v[po], yi = ip4Str(v, po + 16), mac = macStr(v, po + 28);
+  let o = po + 240, hostname = '', vendor = '', paramReq = [];
+  while o + 1 < end) {
+    const tag = v[o];
+    if (tag === 255) break;
+    if (tag === 0) { o++; continue; }
+    const ln = v[o + 1];
+    if (o + 2 + ln > end) break;
+    if (tag === 12) hostname = ascii(v, o + 2, o + 2 + ln);
+    if (tag === 60) vendor = ascii(v, o + 2, o + 2 + ln);
+    if (tag === 55) for (let i = o + 2; i < o + 2 + ln; i++) paramReq.push(v[i]);
+    o += 2 + ln;
+  }
+  p.dhcp = { op, yiaddr: yi, mac, hostname, vendorClass: vendor, paramReq, fpLabel: dhcpFpLabel(paramReq) };
+  p.app = 'DHCP'; p.appSure = true;
+  if (hostname) p.info = (op === 2 ? 'DHCP yanıt' : 'DHCP istek') + ' ' + hostname + ' → ' + yi;
 }
 
 function readName(v, o, base, end) {
@@ -300,6 +374,10 @@ function dDNS(p, v, base, end) {
 function dICMP(p, v, o, end, six) {
   const t = v[o], c = v[o + 1];
   p.app = six ? 'ICMPv6' : 'ICMP';
+  if (six && (t === 135 || t === 136) && end - o >= 24) {
+    p.ndp = { type: t, target: ip6Str(v, o + 8) };
+    p.info = t === 135 ? 'IPv6 Neighbor Solicitation' : 'IPv6 Neighbor Advertisement';
+  }
   const f = [['Tür', t + (!six && ICMP_T[t] ? ' (' + ICMP_T[t] + ')' : '')], ['Kod', c]];
   p.icmp = { type: t, code: c, six };
   if (!six && (t === 8 || t === 0)) { f.push(['Tanımlayıcı', u16(v, o + 4)], ['Sıra no', u16(v, o + 6)]); p.info = (t === 8 ? 'Echo isteği' : 'Echo yanıtı') + ` id=${u16(v, o + 4)} seq=${u16(v, o + 6)}`; }
@@ -331,15 +409,57 @@ function analyze(packets) {
   for (const p of packets) {
     if (p.dns && p.dns.qr && p.dns.questions[0]) for (const a of p.dns.answers) if ((a.type === 1 || a.type === 28) && !A.names.has(a.data)) A.names.set(a.data, p.dns.questions[0].name);
   }
-  for (const p of packets) { if (p.sni) A.names.set(p.dst, p.sni); else if (p.http && p.http.host && /^GET|POST|HEAD|PUT/.test(p.http.first)) A.names.set(p.dst, p.http.host); }
+  for (const p of packets) {
+    if (p.sni) A.names.set(p.dst, p.sni);
+    else if (p.http && p.http.host && /^GET|POST|HEAD|PUT/.test(p.http.first)) A.names.set(p.dst, p.http.host);
+    if (p.dhcp && p.dhcp.yiaddr && p.dhcp.hostname) {
+      const hn = p.dhcp.hostname.replace(/\.local\.?$/i, '');
+      if (hn) A.names.set(p.dhcp.yiaddr, hn);
+    }
+    if (p.nbns && p.nbns.name && p.src) A.names.set(p.src, p.nbns.name);
+    if ((p.app === 'mDNS' || p.app === 'LLMNR') && p.dns && p.dns.qr) {
+      for (const a of p.dns.answers) {
+        if ((a.type === 1 || a.type === 28) && a.data && a.name && a.name !== a.data) {
+          const label = a.name.replace(/\._services\._dns-sd\._udp\.local\.?$/i, '').replace(/\.local\.?$/i, '');
+          if (label) A.names.set(a.data, label.split('.')[0] || label);
+        }
+      }
+    }
+  }
 
   const addProblem = pr => { if (CFG.off.has(pr.type)) return pr; pr.id = A.problems.length + 1; A.problems.push(pr); return pr; };
 
   for (const p of packets) {
     // host
-    const hs = ip => { let h = A.hosts.get(ip); if (!h) { h = { ip, pktsTx: 0, pktsRx: 0, bytesTx: 0, bytesRx: 0, flows: new Set() }; A.hosts.set(ip, h); } return h; };
+    const hs = ip => {
+      let h = A.hosts.get(ip);
+      if (!h) {
+        h = { ip, pktsTx: 0, pktsRx: 0, bytesTx: 0, bytesRx: 0, flows: new Set(), portsOut: new Map(), portsIn: new Map(),
+          openPorts: new Set(), dhcpClass: '', userAgent: '', quicPkts: 0, mdnsPkts: 0, risk: 0, riskTags: [], first: p.ts, last: p.ts };
+        A.hosts.set(ip, h);
+      }
+      h.first = Math.min(h.first, p.ts); h.last = Math.max(h.last, p.ts);
+      return h;
+    };
     const hsrc = hs(p.src), hdst = hs(p.dst);
     hsrc.pktsTx++; hsrc.bytesTx += p.len; hdst.pktsRx++; hdst.bytesRx += p.len;
+    if (p.dhcp && p.dhcp.yiaddr) {
+      const dh = hs(p.dhcp.yiaddr);
+      if (p.dhcp.vendorClass && !dh.dhcpClass) dh.dhcpClass = p.dhcp.vendorClass;
+      if (p.dhcp.fpLabel && !dh.dhcpClass) dh.dhcpClass = p.dhcp.fpLabel;
+    }
+    if (p.http && p.http.userAgent && p.http.method) {
+      const h = hs(p.src);
+      if (!h.userAgent || p.http.userAgent.length > h.userAgent.length) h.userAgent = p.http.userAgent.slice(0, 400);
+    }
+    if (p.app === 'QUIC') hs(p.src).quicPkts++;
+    if (p.app === 'mDNS') hs(p.src).mdnsPkts++;
+    if (p.proto === 'TCP' && p.sport != null && p.dport != null) {
+      const syn = p.flags & 2, ack = p.flags & 16, rst = p.flags & 4;
+      if (syn && !ack) hsrc.portsOut.set(p.dport, (hsrc.portsOut.get(p.dport) || 0) + 1);
+      if (syn && ack) hdst.openPorts.add(p.dport);
+      if (rst && ack && !syn) hdst.portsIn.set(p.dport, (hdst.portsIn.get(p.dport) || 0) + 1);
+    }
 
     // akış
     let key, innerFlow = null;
@@ -516,6 +636,7 @@ function describeFlow(f, A) {
   return bits.join(' ');
 }
 
-const API = { cfg: CFG, parseCapture, dissect, analyze, describePacket, describeFlow, isPrivate, flagStr, QTYPE, RCODE, TLSV, CIPHERS, cipherName, WEAK_CIPHERS, ascii, u16, u32 };
+const API = { cfg: CFG, parseCapture, dissect, analyze, describePacket, describeFlow, isPrivate, flagStr, QTYPE, RCODE, TLSV, CIPHERS, cipherName, WEAK_CIPHERS, ja3Digest, dhcpFpLabel, ascii, u16, u32 };
+try { if (typeof require === 'function') require('./tlspassive.js')(API); } catch (e) { /* yok say */ }
 if (typeof module !== 'undefined' && module.exports) module.exports = API; else root.PL = API;
 })(typeof self !== 'undefined' ? self : this);

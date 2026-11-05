@@ -15,6 +15,7 @@ from urllib.parse import urlparse, parse_qs
 
 from capfilter import compile_filter, FilterError
 from ptentes import PT as PTENTES
+from deviceintel import REGISTRY as DEVICE_REG, scheduled_scan_loop
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -31,6 +32,7 @@ def local_commit():
 LOCAL_COMMIT = local_commit()
 STATIC = {'/': ('index.html', 'text/html; charset=utf-8'), '/style.css': ('style.css', 'text/css; charset=utf-8'),
           '/app.js': ('app.js', 'application/javascript; charset=utf-8'), '/parser.js': ('parser.js', 'application/javascript; charset=utf-8'),
+          '/tlspassive.js': ('tlspassive.js', 'application/javascript; charset=utf-8'),
           '/sample.js': ('sample.js', 'application/javascript; charset=utf-8'),
           '/filter.js': ('filter.js', 'application/javascript; charset=utf-8'),
           '/extras.js': ('extras.js', 'application/javascript; charset=utf-8'),
@@ -40,7 +42,8 @@ STATIC = {'/': ('index.html', 'text/html; charset=utf-8'), '/style.css': ('style
           '/i18n.js': ('i18n.js', 'application/javascript; charset=utf-8'),
           '/ptentes-ui.js': ('ptentes-ui.js', 'application/javascript; charset=utf-8'),
           '/lang-en.js': ('lang-en.js', 'application/javascript; charset=utf-8'),
-          '/update.js': ('update.js', 'application/javascript; charset=utf-8')}
+          '/update.js': ('update.js', 'application/javascript; charset=utf-8'),
+          '/oui.json': ('oui.json', 'application/json; charset=utf-8')}
 SNAP = 1600           # paket başına saklanan en fazla bayt (başlıklar + TLS hello için yeterli)
 MAX_PACKETS = 300000  # bellek koruması
 
@@ -276,7 +279,35 @@ class H(BaseHTTPRequestHandler):
         if u.path == '/api/info':
             return self._send(200, {'interfaces': interfaces(), 'root': os.geteuid() == 0, 'capture': not ARGS.no_capture, 'default_iface': ARGS.iface, 'commit': LOCAL_COMMIT, 'repo': 'sametuca/packetlens'})
         if u.path == '/api/net':
-            return self._send(200, net_info())
+            ni = net_info()
+            DEVICE_REG.merge_arp(ni.get('arp'))
+            return self._send(200, ni)
+        if u.path == '/api/devices/registry':
+            ni = net_info()
+            DEVICE_REG.merge_arp(ni.get('arp'))
+            st = PTENTES.status()
+            if st.get('hosts'):
+                DEVICE_REG.merge_ptentes(st.get('hosts'))
+            gw = (ni.get('gateway') or {}).get('ip') or ''
+            return self._send(200, DEVICE_REG.snapshot(gw))
+        if u.path == '/api/devices/history':
+            return self._send(200, {'history': DEVICE_REG.history})
+        if u.path == '/api/devices/compare':
+            try:
+                a = int(q.get('a', ['-2'])[0])
+                b = int(q.get('b', ['-1'])[0])
+            except ValueError:
+                a, b = -2, -1
+            return self._send(200, DEVICE_REG.compare_history(a, b))
+        if u.path == '/api/devices/scan' and method == 'POST':
+            body = self._json()
+            try:
+                st = PTENTES.status()
+                pt_h = st.get('hosts') if st.get('running') else None
+                r = DEVICE_REG.scan(body, pt_hosts=pt_h)
+            except Exception as e:
+                r = {'ok': False, 'error': str(e)}
+            return self._send(200 if r.get('ok') else 400, r)
         if u.path == '/api/start' and method == 'POST':
             if ARGS.no_capture:
                 return self._send(400, {'error': 'Canlı yakalama kapalı (--no-capture).'})
@@ -367,7 +398,10 @@ def main():
     ap.add_argument('--port', type=int, default=8765)
     ap.add_argument('--no-capture', action='store_true', help='canlı yakalamayı kapat (root gerekmez)')
     ap.add_argument('--no-browser', action='store_true', help='tarayıcıyı otomatik açma')
+    ap.add_argument('--scan-interval', type=int, default=0, metavar='DK',
+                    help='dakikada bir ARP cihaz taraması (0=kapalı, root gerekir)')
     ARGS = ap.parse_args()
+    scan_stop = threading.Event()
     if not sys.platform.startswith('linux') and not ARGS.no_capture:
         print('Uyarı: canlı yakalama yalnızca Linux’ta çalışır; --no-capture ile devam ediliyor.')
         ARGS.no_capture = True
@@ -380,11 +414,16 @@ def main():
     print('Durdurmak için Ctrl+C')
     if not ARGS.no_browser:
         threading.Timer(0.5, open_browser, (url,)).start()
+    if ARGS.scan_interval > 0 and os.geteuid() == 0 and sys.platform.startswith('linux'):
+        iface = ARGS.iface if ARGS.iface != 'any' else (default_gateway()[0] or 'eth0')
+        threading.Thread(target=scheduled_scan_loop, args=(iface, max(60, ARGS.scan_interval * 60), scan_stop), daemon=True).start()
+        print('Zamanlanmış ARP taraması: her %d dk (%s)' % (ARGS.scan_interval, iface))
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        scan_stop.set()
         CAP.stop()
         PTENTES.stop()
         srv.server_close()

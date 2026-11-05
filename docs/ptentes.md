@@ -29,17 +29,26 @@ Durdurduğunuzda motor doğru ARP eşlemelerini geri gönderir ve
 |---|---|
 | ARP zehirleme | Hedefe "ağ geçidi benim", ağ geçidine "hedef benim" yanıtları gönderilir; 1,8 sn'de bir yenilenir. |
 | IP yönlendirme | `ip_forward=1` iken trafik kesintisiz akar; motor yalnızca kopyayı okur. |
-| HTTP gözlemi | İstek satırı, `Host`, `User-Agent`, Basic auth ve form alanları çözümlenir. |
-| TLS SNI | Şifreli trafikte bile bağlantı kurulan alan adı okunur. |
+| HTTP gözlemi | İstek satırı, `Host`, Basic auth, form/JSON gövdesi ve sorgu dizisindeki kullanıcı/parola alanları. |
+| Çerezler | Şifresiz HTTP yanıtlarındaki `Set-Cookie` başlıkları kaydedilir. |
+| TLS SNI | 443/8443/4443/9443 portlarında ClientHello içinden alan adı okunur. |
+| ARP uyarısı | Hedef veya ağ geçidi gerçek MAC ile geri bildirilirse (izolasyon, DAI) olay günlüğüne düşer. |
 | DNS | Sorgular kaydedilir; eşlemede karşılığı olan alan adlarına sahte A yanıtı gönderilir. |
 | Cihaz keşfi | Yerel alt ağda ARP taraması yapıp MAC/IP listesi çıkarır. |
 | Rapor | Oturumun tamamı JSON olarak indirilebilir. |
+
+## Mobil / Wi‑Fi MITM akışı
+
+1. Canlı analizi aynı Wi‑Fi arayüzünde başlatın (promiscuous).
+2. **Cihazlar** → hedef telefon → **ptentes** veya keşif + hedef IP.
+3. **▶ Araya gir** → **Siteler** sekmesinde DNS/SNI birikir; **Yakalamada izle** ile ana pencerede hedef filtresi uygulanır.
+4. **ARP uyarısı** artıyorsa izolasyon veya DAI vardır — MITM tutmuyor olabilir.
 
 ## Sınırlar
 
 - HTTPS **içeriği** çözülmez; sertifika değiştirme (SSL stripping / sahte CA)
   bu modülde yoktur. Yalnızca SNI görünür.
-- QUIC/HTTP3 trafiği UDP olduğu için HTTP gözlemi kapsamaz.
+- QUIC/HTTP3 trafiği UDP olduğu için HTTP gözlemi kapsamaz (SNI QUIC için ayrı geliştirme gerekir).
 - Paket parçalanması ve TCP segmentasyonu nedeniyle çok büyük isteklerde
   başlık/gövde alanları eksik okunabilir (snap uzunluğu 1600 bayttır).
 - Wi-Fi istemci izolasyonu açıksa ARP zehirleme çalışmaz.
@@ -56,7 +65,9 @@ test yaptığınız ağlarda kullanın.
 | Yol | Yöntem | Gövde |
 |---|---|---|
 | `/api/ptentes/status` | GET | — |
-| `/api/ptentes/start` | POST | `{iface,target,gateway,dns_spoof,forward,dns_map}` |
+| `/api/ptentes/start` | POST | `{iface,target,targets[],gateway,dns_spoof,forward,dns_map}` |
+| `/api/devices/scan` | POST | `{iface,modes:[arp,ping,ports],ports?,ips?}` |
+| `/api/devices/registry` | GET | Birleşik cihaz kaydı |
 | `/api/ptentes/stop` | POST | — |
 | `/api/ptentes/dnsmap` | POST | `{map:{host:ip}}` |
 | `/api/ptentes/discover` | POST | `{iface}` |

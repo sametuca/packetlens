@@ -240,3 +240,11 @@ td.num{white-space:nowrap}
 .pt-detail { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pt-line .mono { background: none; border: 0; padding: 0; }
 @media (max-width: 720px) { .pt-row { grid-template-columns: 1fr; } .pt-row > label { padding-top: 0; } }
+
+/* cihaz kartları */
+.dev-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.dev-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; background: var(--surface); display: flex; flex-direction: column; gap: 6px; }
+.dev-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.dev-meta { font-size: 13px; color: var(--muted); }
+.dev-roles { display: flex; flex-wrap: wrap; gap: 4px; }
+.dev-actions { margin-top: 4px; }

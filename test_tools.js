@@ -1,4 +1,4 @@
-const fs = require('fs'), PL = require('./parser.js'); require('./extras.js')(PL); require('./tools.js')(PL);
+const fs = require('fs'), PL = require('./parser.js'); require('./tlspassive.js')(PL); require('./extras.js')(PL); require('./tools.js')(PL);
 const assert = require('assert');
 const buf = fs.readFileSync('sample.pcap'); const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.length);
 const raw = PL.parseCapture(ab), pk = raw.map((r, i) => PL.dissect(r, i + 1)), A = PL.analyze(pk);
