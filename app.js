@@ -394,7 +394,7 @@ async function initServer() {
   srvInit = 'loading';
   srvInitDetail = '';
   try {
-    const r = await fetch('/api/info');
+    const r = await fetch(location.origin + '/api/info', { cache: 'no-store' });
     let j = {};
     try { j = await r.json(); } catch (e) { /* boş gövde */ }
     if (!r.ok) {
@@ -402,6 +402,8 @@ async function initServer() {
       S.srv = null;
       if (r.status === 401) srvInitDetail = 'stale';
       else if (r.status === 403) srvInitDetail = 'host';
+      else if (r.status === 404) srvInitDetail = '404';
+      else if (r.status >= 500) srvInitDetail = '500';
       else srvInitDetail = 'http';
       renderLivebar();
       return;
@@ -441,7 +443,9 @@ function renderLivebar() {
     else if (srvInit === 'loading') msg = 'Sunucuya bağlanılıyor…';
     else if (srvInit === 'fail' && srvInitDetail === 'stale') msg = 'Portta <b>eski</b> PacketLens çalışıyor (token istiyor). Kali’de: <span class="mono">pkill -f packetlens.py</span> → <span class="mono">sudo python3 packetlens.py</span> → sayfayı <b>Ctrl+Shift+R</b> ile yenileyin.';
     else if (srvInit === 'fail' && srvInitDetail === 'host') msg = 'Host reddedildi. Adres çubuğu <span class="mono">http://127.0.0.1:' + (location.port || '8765') + '</span> olmalı.';
-    else if (srvInit === 'fail') msg = 'Sunucu yanıt vermedi. Kali’de program çalışıyor mu? Terminaldeki tam URL’yi açın (port 8766 olabilir).' + liveConnectHint();
+    else if (srvInit === 'fail' && srvInitDetail === '404') msg = 'Bu adreste PacketLens API yok (yanlış sunucu?). Terminalde <span class="mono">./start.sh</span> veya <span class="mono">sudo python3 packetlens.py</span> ile başlatın.';
+    else if (srvInit === 'fail' && srvInitDetail === '500') msg = 'Sunucu hatası (/api/info). Terminal penceresindeki hata satırına bakın; güncel kodu çekip sunucuyu yeniden başlatın.';
+    else if (srvInit === 'fail') msg = 'Sunucu yanıt vermedi. Kali’de program çalışıyor mu? Terminalde: <span class="mono">curl -s http://127.0.0.1:' + (location.port || '8765') + '/api/info | head</span>' + liveConnectHint();
     else msg = `Sunucu bilinmiyor. Kali terminalinde: ${cmd}`;
     bar.innerHTML = `<b>Canlı analiz</b><span class="muted">${msg}</span><button class="btn sm ghost" data-act="analyze">Kapat ✕</button>`;
   } else if (!s.capture) {
@@ -522,7 +526,7 @@ document.addEventListener('click', e => {
     case 'menu': { const p = $('#menu-pop'); p.hidden = !p.hidden; $('#b-menu').setAttribute('aria-expanded', String(!p.hidden)); return; }
     case 'open': $('#file').click(); break;
     case 'pickif': { const c = $('#capf'); if (c) S.live.filter = c.value; S.live.iface = v; S.set.iface = v; renderLivebar(); return; }
-    case 'analyze': S.liveOpen = !S.liveOpen; if (S.liveOpen && !S.srv && srvInit !== 'loading') initServer().then(() => renderLivebar()); else if (S.liveOpen) loadNet().then(renderLivebar); renderLivebar(); if (S.liveOpen) { const c = $('#capf'); if (c) c.focus(); } break;
+    case 'analyze': S.liveOpen = !S.liveOpen; if (S.liveOpen && !S.srv) initServer().then(() => renderLivebar()); else if (S.liveOpen) loadNet().then(renderLivebar); renderLivebar(); if (S.liveOpen) { const c = $('#capf'); if (c) c.focus(); } break;
     case 'settings': S.tab = S.tab === 'settings' ? (S.A ? 'summary' : 'summary') : 'settings'; if (S.tab === 'settings') { $('#empty').hidden = true; $('#app').hidden = false; } else if (!S.A) { $('#empty').hidden = false; $('#app').hidden = true; } S.liveOpen = false; renderLivebar(); render(); break;
     case 'ptentes': S.mode = 'adv'; try { localStorage.setItem('pl-mode', 'adv'); } catch (x) { /* yok say */ } S.tab = 'ptentes'; $('#empty').hidden = true; $('#app').hidden = false; S.liveOpen = false; renderLivebar(); render(); break;
     case 'lang': S.set.lang = v; saveSettings(); applySettings(false); render(); renderLivebar(); if (window.PLI) window.PLI.apply(document.body); break;

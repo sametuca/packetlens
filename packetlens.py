@@ -208,8 +208,13 @@ def interfaces():
 def default_gateway():
     for line in _read('/proc/net/route').split('\n')[1:]:
         f = line.split()
-        if len(f) > 3 and f[1] == '00000000' and int(f[3], 16) & 2:
-            return f[0], _hex_ip(f[2])
+        if len(f) <= 3 or f[1] != '00000000':
+            continue
+        try:
+            if int(f[3], 16) & 2:
+                return f[0], _hex_ip(f[2])
+        except ValueError:
+            continue
     return '', ''
 
 
@@ -290,8 +295,13 @@ class H(BaseHTTPRequestHandler):
         if not u.path.startswith('/api/'):
             return self._send(404, {'error': 'yok'})
         if u.path == '/api/info':
-            return self._send(200, {'interfaces': interfaces(), 'root': os.geteuid() == 0, 'capture': not ARGS.no_capture,
-                                    'default_iface': ARGS.iface, 'commit': LOCAL_COMMIT, 'repo': 'sametuca/packetlens', 'platform': sys.platform})
+            try:
+                payload = {'interfaces': interfaces(), 'root': os.geteuid() == 0, 'capture': not ARGS.no_capture,
+                           'default_iface': ARGS.iface, 'commit': LOCAL_COMMIT, 'repo': 'sametuca/packetlens', 'platform': sys.platform}
+                return self._send(200, payload)
+            except Exception as e:
+                sys.stderr.write('PacketLens /api/info hatası: %s\n' % e)
+                return self._send(500, {'error': 'info', 'detail': str(e)})
         if u.path == '/api/net':
             ni = net_info()
             DEVICE_REG.merge_arp(ni.get('arp'))
