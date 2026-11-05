@@ -386,6 +386,7 @@ async function initServer() {
     const { ok, j } = await api('/api/info'); if (!ok) return;
     S.srv = j; await loadNet(); renderLivebar();
     $('#live-hint').textContent = j.capture ? (j.root ? 'Canlı analiz hazır: “▶ Analiz et” düğmesine basın.' : 'Canlı analiz için programı sudo ile başlatın (şu an root değil).') : 'Canlı yakalama kapalı (--no-capture).';
+  if (window.PLApp && window.PLApp.checkUpdate) window.PLApp.checkUpdate(j.commit);
   } catch (e) { /* sunucu yok: sadece dosya modu */ }
 }
 function renderLivebar() {

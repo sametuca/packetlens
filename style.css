@@ -31,6 +31,8 @@ button, input, select { font: inherit; color: inherit; }
 .seg button { border: 0; background: var(--surface); padding: 6px 14px; cursor: pointer; } .seg button.on { background: var(--accent); color: #fff; }
 
 .livebar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 8px 20px; background: var(--surface2); border-bottom: 1px solid var(--line); }
+.update-bar { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; padding: 8px 20px; background: var(--accent-bg); color: var(--text); border-bottom: 1px solid var(--line); font-size: 13px; }
+.update-bar .btn.sm { padding: 4px 10px; font-size: 12px; }
 .livebar select { padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); }
 .rec { display: inline-flex; align-items: center; gap: 6px; color: var(--high); font-weight: 600; }
 .rec::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--high); animation: pulse 1.2s infinite; }
@@ -234,6 +236,7 @@ td.num{white-space:nowrap}
 .pt-feed { display: flex; flex-direction: column; gap: 2px; max-height: 460px; overflow: auto; }
 .pt-line { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-bottom: 1px solid var(--line); font-size: 12px; }
 .pt-line.bad { background: var(--high-bg); }
+.pt-line.warn { background: rgba(200, 140, 0, 0.12); }
 .pt-detail { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pt-line .mono { background: none; border: 0; padding: 0; }
 @media (max-width: 720px) { .pt-row { grid-template-columns: 1fr; } .pt-row > label { padding-top: 0; } }

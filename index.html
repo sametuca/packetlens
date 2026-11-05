@@ -7,6 +7,11 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<div id="update-bar" class="update-bar" hidden>
+  <span id="update-bar-text"></span>
+  <a id="update-bar-link" class="btn sm" target="_blank" rel="noopener">Değişiklikleri gör</a>
+  <button class="btn sm ghost" data-act="update-dismiss">Kapat ✕</button>
+</div>
 <header class="top">
   <div class="brand"><span class="logo" aria-hidden="true">◎</span><b>PacketLens</b></div>
   <div class="top-actions">
@@ -84,5 +89,6 @@
 <script src="views.js"></script>
 <script src="features.js"></script>
 <script src="ptentes-ui.js"></script>
+<script src="update.js"></script>
 </body>
 </html>

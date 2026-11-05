@@ -17,6 +17,18 @@ from capfilter import compile_filter, FilterError
 from ptentes import PT as PTENTES
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+def local_commit():
+    """Çalışan kopyanın git HEAD özeti (kısa sha). Repo değilse veya git yoksa None."""
+    try:
+        r = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=HERE, capture_output=True, text=True, timeout=2)
+        h = r.stdout.strip()
+        return h if r.returncode == 0 and h else None
+    except Exception:
+        return None
+
+
+LOCAL_COMMIT = local_commit()
 STATIC = {'/': ('index.html', 'text/html; charset=utf-8'), '/style.css': ('style.css', 'text/css; charset=utf-8'),
           '/app.js': ('app.js', 'application/javascript; charset=utf-8'), '/parser.js': ('parser.js', 'application/javascript; charset=utf-8'),
           '/sample.js': ('sample.js', 'application/javascript; charset=utf-8'),
@@ -27,7 +39,8 @@ STATIC = {'/': ('index.html', 'text/html; charset=utf-8'), '/style.css': ('style
           '/features.js': ('features.js', 'application/javascript; charset=utf-8'),
           '/i18n.js': ('i18n.js', 'application/javascript; charset=utf-8'),
           '/ptentes-ui.js': ('ptentes-ui.js', 'application/javascript; charset=utf-8'),
-          '/lang-en.js': ('lang-en.js', 'application/javascript; charset=utf-8')}
+          '/lang-en.js': ('lang-en.js', 'application/javascript; charset=utf-8'),
+          '/update.js': ('update.js', 'application/javascript; charset=utf-8')}
 SNAP = 1600           # paket başına saklanan en fazla bayt (başlıklar + TLS hello için yeterli)
 MAX_PACKETS = 300000  # bellek koruması
 
@@ -261,7 +274,7 @@ class H(BaseHTTPRequestHandler):
         if not secrets.compare_digest(q.get('t', [''])[0], TOKEN):
             return self._send(401, {'error': 'token'})
         if u.path == '/api/info':
-            return self._send(200, {'interfaces': interfaces(), 'root': os.geteuid() == 0, 'capture': not ARGS.no_capture, 'default_iface': ARGS.iface})
+            return self._send(200, {'interfaces': interfaces(), 'root': os.geteuid() == 0, 'capture': not ARGS.no_capture, 'default_iface': ARGS.iface, 'commit': LOCAL_COMMIT, 'repo': 'sametuca/packetlens'})
         if u.path == '/api/net':
             return self._send(200, net_info())
         if u.path == '/api/start' and method == 'POST':

@@ -2,6 +2,8 @@
 (function () {
 if (!window.PLI) return;
 window.PLI.add({
+ "Yeni bir PacketLens güncellemesi var": "A new PacketLens update is available",
+ "Değişiklikleri gör": "View changes",
  "Echo yanıtı (ping cevabı)": "Echo reply (ping response)",
  "Hedefe ulaşılamadı": "Destination unreachable",
  "Yönlendirme": "Redirect",
@@ -804,7 +806,24 @@ window.PLI.add({
  "NXDOMAIN (böyle bir alan adı yok)": "NXDOMAIN (no such domain name)",
  "DNS sunucusu \"{}\" için hata döndürdü: {} (böyle bir alan adı yok).": "The DNS server returned an error for \"{1}\": {2} (no such domain name).",
  ".pcap / .pcapng dosyası açın; PacketLens trafiği uygulamalara, bağlantılara ve sorunlara ayırıp düz dille anlatsın.": "Open a .pcap / .pcapng file; PacketLens splits the traffic into applications, connections and problems and explains it in plain language.",
- "Ara, sor ya da filtre yaz: \"yavaş dns\", \"google.com\", ip.addr == 192.168.1.23 && tcp.port == 443 ( / tuşu ile odaklan )": "Search, ask or type a filter: \"slow dns\", \"google.com\", ip.addr == 192.168.1.23 && tcp.port == 443 ( press / to focus )"
+ "Ara, sor ya da filtre yaz: \"yavaş dns\", \"google.com\", ip.addr == 192.168.1.23 && tcp.port == 443 ( / tuşu ile odaklan )": "Search, ask or type a filter: \"slow dns\", \"google.com\", ip.addr == 192.168.1.23 && tcp.port == 443 ( press / to focus )",
+ "araya girme motoru": "MITM engine",
+ "çerez": "cookie",
+ "ARP uyarısı": "ARP warning",
+ "Çerezler": "Cookies",
+ "Olaylarda filtre…": "Filter events…",
+ "Panoya kopyala": "Copy to clipboard",
+ "Eşlemeyi uygula": "Apply mapping",
+ "DNS eşlemesi güncellendi ({} kayıt)": "DNS mapping updated ({1} entries)",
+ "Kimlik bilgileri panoya kopyalandı": "Credentials copied to clipboard",
+ "Panoya kopyalanamadı": "Could not copy to clipboard",
+ "Kopyalanacak kayıt yok": "Nothing to copy",
+ "Olay yok veya filtre eşleşmedi.": "No events or filter did not match.",
+ "Set-Cookie başlığı yakalanmadı. Sunucu yanıtları şifresiz HTTP üzerindeyse oturum çerezleri burada görünür.": "No Set-Cookie headers captured. Session cookies appear here when server responses use plain HTTP.",
+ "Henüz kimlik bilgisi yakalanmadı. Şifresiz HTTP (form, Basic auth, JSON gövde, sorgu dizisi) okunur; HTTPS içeriği şifreli kalır.": "No credentials captured yet. Plain HTTP (forms, Basic auth, JSON body, query string) is parsed; HTTPS content stays encrypted.",
+ "Değerleri gizle": "Hide values",
+ "Değerleri göster": "Show values",
+ "oturum açıkken güncellenebilir": "can be updated while session is active"
 });
 window.PLI.addTokens([
   [/(\d) sn\b/g, '$1 s'], [/(\d) dk\b/g, '$1 min'], [/(\d) bayt\b/g, '$1 bytes'],
