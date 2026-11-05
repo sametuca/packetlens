@@ -7,16 +7,16 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div id="update-bar" class="update-bar" hidden>
+<div id="update-bar" class="update-bar page-inset-x" hidden>
   <span id="update-bar-text"></span>
   <a id="update-bar-link" class="btn sm" target="_blank" rel="noopener">Değişiklikleri gör</a>
-  <button class="btn sm ghost" data-act="update-dismiss">Kapat ✕</button>
+  <button class="btn sm ghost" data-act="update-dismiss">Kapat</button>
 </div>
-<header class="top">
+<header class="top page-inset-x">
   <div class="brand"><span class="logo" aria-hidden="true">◎</span><b>PacketLens</b></div>
   <div class="top-actions">
     <div class="menu" id="menu">
-      <button class="btn" data-act="menu" id="b-menu" aria-haspopup="true" aria-expanded="false">☰ Menü ▾</button>
+      <button class="btn" data-act="menu" id="b-menu" aria-haspopup="true" aria-expanded="false">Menü</button>
       <div class="menu-pop" id="menu-pop" hidden>
         <div class="menu-lab">Görünüm</div>
         <div class="seg wide" role="group" aria-label="Mod">
@@ -29,30 +29,22 @@
           <button data-act="lang" data-v="en" id="l-en" title="English">EN</button>
         </div>
         <hr>
-        <button class="menu-item" data-act="open">📂 Dosya aç</button>
-        <button class="menu-item" data-act="settings">⚙ Ayarlar</button>
+        <button class="menu-item" data-act="open">Dosya aç</button>
+        <button class="menu-item" data-act="settings">Ayarlar</button>
       </div>
     </div>
-    <button class="btn" data-act="ptentes" id="b-pt" title="Araya girme motoru">ptentes</button>
-    <button class="btn" data-act="settings" id="b-set" title="Ayarlar">⚙ Ayarlar</button>
-    <button class="btn primary big" data-act="analyze" id="b-live">▶ Canlı analiz</button>
+    <button class="btn primary" data-act="analyze" id="b-live">Canlı analiz</button>
     <input type="file" id="file" accept=".pcap,.pcapng,.cap" hidden>
   </div>
 </header>
 
-<div id="livebar" class="livebar" hidden></div>
+<div id="livebar" class="livebar page-inset-x" hidden></div>
 
 <main id="main">
-  <section id="empty" class="hero">
-    <div class="drop" id="drop">
-      <div class="drop-ic">⇪</div>
-      <h1>Bir yakalama dosyasını buraya bırakın</h1>
-      <p>.pcap / .pcapng dosyası açın; PacketLens trafiği uygulamalara, bağlantılara ve sorunlara ayırıp düz dille anlatsın.</p>
-      <div class="row">
-        <button class="btn" data-act="open">📂 Dosya seç</button>
-      </div>
-      <p class="muted small" id="live-hint"></p>
-    </div>
+  <section id="home" class="home">
+    <p class="home-idle" id="home-idle"></p>
+    <div id="live-after" class="live-after" hidden></div>
+    <div id="live-home"></div>
   </section>
 
   <section id="app" hidden>
@@ -60,8 +52,8 @@
       <div class="sb-row">
         <input id="q" type="search" autocomplete="off" spellcheck="false" placeholder='Ara, sor ya da filtre yaz: "yavaş dns", "google.com", ip.addr == 192.168.1.23 && tcp.port == 443   ( / tuşu ile odaklan )'>
         <button class="btn ghost" data-act="clearq" id="clearq" hidden>Temizle</button>
-        <button class="btn" data-act="fl-lib" title="Hazır filtreler ve filtre rehberi">📚 Filtreler</button>
-        <button class="btn" data-act="fl-export" title="Rapor, CSV, JSON, .pcap">⇩ Dışa aktar</button>
+        <button class="btn" data-act="fl-lib" title="Hazır filtreler ve filtre rehberi">Filtreler</button>
+        <button class="btn" data-act="fl-export" title="Rapor, CSV, JSON, .pcap">Dışa aktar</button>
       </div>
       <div class="sb-meta" id="qmeta"></div>
     </div>
@@ -82,6 +74,7 @@
 <script src="filter.js"></script>
 <script src="extras.js"></script>
 <script src="tools.js"></script>
+<script src="pl-boot.js"></script>
 <script src="app.js"></script>
 <script src="views.js"></script>
 <script src="features.js"></script>

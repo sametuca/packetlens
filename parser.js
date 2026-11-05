@@ -320,7 +320,7 @@ function dDHCP(p, v, po, end) {
   if (end - po < 240) return;
   const op = v[po], yi = ip4Str(v, po + 16), mac = macStr(v, po + 28);
   let o = po + 240, hostname = '', vendor = '', paramReq = [];
-  while o + 1 < end) {
+  while (o + 1 < end) {
     const tag = v[o];
     if (tag === 255) break;
     if (tag === 0) { o++; continue; }

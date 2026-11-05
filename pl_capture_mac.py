@@ -4,6 +4,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 
 from pl_pcap_stream import pcap_stdout_loop, stop_subproc_capture
 
@@ -55,8 +56,15 @@ def list_tcpdump_interfaces(tcpdump=None):
 def _resolve_iface(iface, ifaces):
     if not iface or iface == 'any':
         for row in ifaces:
-            if row['id'] not in ('lo0', 'lo') and row.get('state') != 'down':
-                return row['id']
+            iid = row['id']
+            if iid.startswith('ap') or iid in ('lo0', 'lo'):
+                continue
+            if row.get('state') != 'down':
+                return iid
+        for row in ifaces:
+            iid = row['id']
+            if iid not in ('lo0', 'lo') and row.get('state') != 'down':
+                return iid
         return ifaces[0]['id'] if ifaces else 'en0'
     for row in ifaces:
         if row['id'] == iface or row.get('label') == iface:
@@ -101,7 +109,23 @@ def start_mac_capture(capture, iface, flt_text, snap, max_packets, duration, pro
         daemon=True,
     )
     capture.thread.start()
-    threading.Timer(0.4, _check_tcpdump_stderr, args=(capture, proc)).start()
+    time.sleep(0.2)
+    if proc.poll() is not None:
+        try:
+            err = (proc.stderr.read() or b'').decode('utf-8', errors='replace').strip()
+        except Exception:
+            err = ''
+        capture.running = False
+        if err:
+            if 'must be root' in err.lower() or 'permission' in err.lower():
+                capture.error = 'Yakalama için sudo gerekir: sudo python3 packetlens.py veya start.command'
+            else:
+                capture.error = err.split('\n')[0][:240]
+        else:
+            capture.error = 'tcpdump hemen kapandı (arayüz veya izin hatası)'
+        stop_subproc_capture(capture)
+        return False
+    threading.Timer(0.6, _check_tcpdump_stderr, args=(capture, proc)).start()
     return True
 
 

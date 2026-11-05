@@ -1,7 +1,13 @@
 /* PacketLens arayüzü */
 (function () {
 'use strict';
-const PL = window.PL, PLF = window.PLF;
+const PLF = window.PLF;
+function getPL() {
+  const p = window.PL;
+  return p && typeof p.analyze === 'function' && typeof p.dissect === 'function' ? p : null;
+}
+/** @deprecated use getPL() — parser yüklenince window.PL güncellenir */
+const PL = window.PL;
 const $ = (s, r) => (r || document).querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const S = { A: null, raw: [], pk: [], mode: 'simple', tab: 'summary', timeRange: null, visPre: [], logTab: 'dns', probCat: 'all', query: null, qtext: '', flowFilter: null, pktSet: null, pktSetLabel: '', vis: [], visFlows: new Set(), selPkt: null, flowSort: 'start', follow: true, srv: null, live: { running: false, since: 0, timer: null, iface: 'any', dirty: false }, appColors: new Map() };
@@ -17,7 +23,8 @@ S.follow = S.set.follow !== false;
 let ROW = 26;
 function saveSettings() { try { localStorage.setItem('pl-settings', JSON.stringify(S.set)); } catch (e) { /* yok say */ } }
 function applySettings(re) {
-  const st = S.set, c = PL.cfg;
+  const pl = getPL(); if (!pl) return;
+  const st = S.set, c = pl.cfg;
   document.documentElement.dataset.theme = st.theme || 'auto'; document.documentElement.lang = st.lang;
   ROW = st.density === 'compact' ? 22 : 26; document.documentElement.style.setProperty('--row', ROW + 'px');
   c.dnsSlow = st.dnsSlow / 1000; c.rttSlow = st.rttSlow / 1000; c.retransMed = st.retransMed; c.scanTargets = st.scanTargets; c.tunnelSubs = st.tunnelSubs; c.dgaNames = st.dgaNames; c.sweepHosts = st.sweepHosts; c.off = new Set(st.off || []);
@@ -127,16 +134,19 @@ function parseQuery(text) {
 
 /* ---------- veri yükleme ---------- */
 function ingest(rawList, name) {
-  S.raw = rawList; S.pk = rawList.map((r, i) => PL.dissect(r, i + 1));
+  const pl = getPL(); if (!pl) { toast(T('Analiz modülü yüklenemedi. Sayfayı Cmd+Shift+R ile yenileyin.')); return; }
+  S.raw = rawList; S.pk = rawList.map((r, i) => pl.dissect(r, i + 1));
   S.live.name = name || ''; if (!S.live.running) S.live.since = 0; S.flowFilter = null; S.pktSet = null; S.selPkt = null; S.timeRange = null; S.appColors.clear();
   reanalyze(true);
-  $('#empty').hidden = true; $('#app').hidden = false; S.find = null; S.liveOpen = false; renderLivebar();
+  const after = $('#live-after'); if (after) after.hidden = true;
+  S.find = null; S.liveOpen = false; syncScreen(); renderLivebar();
   if (S.tab === 'packets' && S.mode === 'simple') S.tab = 'summary';
   if (S.tab === 'settings') S.tab = 'summary';
   render();
 }
 function reanalyze(full) {
-  S.A = PL.analyze(S.pk);
+  const pl = getPL(); if (!pl) return;
+  S.A = pl.analyze(S.pk);
   if (S.set.names === false) S.A.nm = ip => ip;
   S.A.packets.forEach(p => { p._s = p.anoms.length ? pSev(p) : ''; });
   S.A.apps.forEach(a => appColor(a.app));
@@ -152,25 +162,37 @@ function computeVisible() {
   S.vis = l; S.visFlows = new Set(l.map(p => p.flow));
 }
 function loadBuffer(buf, name) {
-  try { const raw = PL.parseCapture(buf); if (!raw.length) throw new Error('Dosyada paket bulunamadı.'); stopLiveUI(); ingest(raw, name); toast(`${raw.length} paket yüklendi`); }
+  try {
+    const pl = getPL(); if (!pl) throw new Error(T('Analiz modülü yüklenemedi.'));
+    const raw = pl.parseCapture(buf); if (!raw.length) throw new Error('Dosyada paket bulunamadı.'); stopLiveUI(); ingest(raw, name); toast(`${raw.length} paket yüklendi`);
+  }
   catch (e) { toast(e.message || 'Dosya okunamadı'); }
 }
 function loadFile(f) { const r = new FileReader(); r.onload = () => loadBuffer(r.result, f.name); r.readAsArrayBuffer(f); }
 /* ---------- üst çubuk / mod / sekmeler ---------- */
+function closeMenu() {
+  const p = $('#menu-pop'), b = $('#b-menu');
+  if (p) p.hidden = true;
+  if (b) b.setAttribute('aria-expanded', 'false');
+}
 function renderChrome() {
   $('#m-simple').classList.toggle('on', S.mode === 'simple'); $('#m-adv').classList.toggle('on', S.mode === 'adv');
-  $('#b-set').classList.toggle('on', S.tab === 'settings');
   $('#l-tr').classList.toggle('on', S.set.lang === 'tr'); $('#l-en').classList.toggle('on', S.set.lang === 'en');
   const A = S.A;
   $('#app').classList.toggle('nodata', !A);
   if (!A) {
     if (S.tab === 'ptentes') {
       $('#tabs').innerHTML = `<button class="tab on" data-act="tab" data-v="ptentes" role="tab">ptentes</button>`;
-      $('#qmeta').innerHTML = '<span class="muted small">Araya girme motoru — yakalama dosyası olmadan da çalışır.</span>';
+      $('#qmeta').innerHTML = `<span class="muted small">${T('Araya girme motoru — yakalama dosyası olmadan da çalışır.')}</span>`;
+      return;
+    }
+    if (S.mode === 'adv') {
+      $('#tabs').innerHTML = `<button class="tab" data-act="tab" data-v="ptentes" role="tab">ptentes</button>`;
+      $('#qmeta').innerHTML = `<span class="muted small">${T('Gelişmiş mod: ptentes araya girme paneli.')}</span>`;
       return;
     }
     if (S.tab === 'settings') {
-      $('#tabs').innerHTML = `<button class="tab on" data-act="tab" data-v="settings" role="tab">${T('⚙ Ayarlar')}</button>`;
+      $('#tabs').innerHTML = `<button class="tab on" data-act="tab" data-v="settings" role="tab">${T('Ayarlar')}</button>`;
       $('#qmeta').innerHTML = `<span class="muted small">${T('Paket yüklemeden dil, tema ve canlı yakalama tercihlerini düzenleyebilirsiniz.')}</span>`;
       return;
     }
@@ -178,18 +200,18 @@ function renderChrome() {
   }
   const tabs = [['summary', 'Özet'], ['problems', 'Sorunlar', A.problems.length], ['flows', 'Bağlantılar', A.flows.length], ['devices', 'Cihazlar'], ['sites', 'Siteler'], ['map', 'Harita'], ['charts', 'Grafik']];
   if (S.mode === 'adv') tabs.push(['packets', 'Paketler', A.packets.length], ['stats', 'İstatistik'], ['logs', 'Günlükler'], ['ptentes', 'ptentes']);
-  tabs.push(['settings', '⚙ Ayarlar']);
+  tabs.push(['settings', 'Ayarlar']);
   if (!tabs.some(t => t[0] === S.tab)) S.tab = 'summary';
   $('#tabs').innerHTML = tabs.map(t => `<button class="tab ${S.tab === t[0] ? 'on' : ''}" data-act="tab" data-v="${t[0]}" role="tab">${t[1]}${t[2] != null ? `<span class="badge ${t[0] === 'problems' && A.stats.high ? 'bad' : ''}">${t[2]}</span>` : ''}</button>`).join('');
   const meta = [];
   if (S.query && S.query.test) { S.query.labels.forEach(l => meta.push(`<span class="chip on">${esc(l.label)}</span>`)); meta.push(`<span>→ ${S.vis.length} paket, ${S.visFlows.size} bağlantı</span>`); }
   if (S.query && S.query.error) meta.push(`<span class="chip err" title="Filtre ifadesi geçersiz">⚠ ${esc(S.query.error)}</span>`);
-  if (S.timeRange) meta.push(`<button class="chip on" data-act="cleartime">Zaman: ${S.timeRange[0].toFixed(2)}–${S.timeRange[1].toFixed(2)} sn ✕</button>`);
-  if (S.flowFilter) meta.push(`<button class="chip on" data-act="clrflow">Bağlantı #${S.flowFilter} ✕</button>`);
-  if (S.pktSet) meta.push(`<button class="chip on" data-act="clrset">${esc(S.pktSetLabel)} ✕</button>`);
+  if (S.timeRange) meta.push(`<button class="chip on" data-act="cleartime">Zaman: ${S.timeRange[0].toFixed(2)}–${S.timeRange[1].toFixed(2)} sn · temizle</button>`);
+  if (S.flowFilter) meta.push(`<button class="chip on" data-act="clrflow">Bağlantı #${S.flowFilter} · temizle</button>`);
+  if (S.pktSet) meta.push(`<button class="chip on" data-act="clrset">${esc(S.pktSetLabel)} · temizle</button>`);
   if (S.query && S.query.wire) meta.push(`<span>Wireshark filtresi:</span><span class="wire">${esc(S.query.wire)}</span><button class="btn sm ghost" data-act="copywire">Kopyala</button>`);
   if (!meta.length) { meta.push(['sorunlar', 'yavaş dns', 'tls', 'şifresiz', 'tcp.port == 443', 'dns.time > 0.1'].map(x => `<button class="chip" data-act="try" data-v="${esc(x)}">${esc(x)}</button>`).join(' '));
-    if ((S.set.presets || []).length) meta.push('<span class="muted">|</span>', S.set.presets.map(x => `<button class="chip pre" data-act="try" data-v="${esc(x.f)}" title="${esc(x.f)}">★ ${esc(x.n)}</button>`).join(' ')); }
+    if ((S.set.presets || []).length) meta.push('<span class="muted">|</span>', S.set.presets.map(x => `<button class="chip pre" data-act="try" data-v="${esc(x.f)}" title="${esc(x.f)}">${esc(x.n)}</button>`).join(' ')); }
   $('#qmeta').innerHTML = meta.join(' ');
   $('#clearq').hidden = !S.qtext;
 }
@@ -199,10 +221,12 @@ function render() {
   const v = $('#view');
   if (!v) return;
   const sc = v.scrollTop;
-  const extra = (window.PLApp && window.PLApp.views) || {};
-  const R = Object.assign({ summary: renderSummary, problems: renderProblems, flows: renderFlows, packets: renderPackets }, extra);
+  const views = (window.PLApp && window.PLApp.views) || {};
+  const R = Object.assign({ summary: renderSummary, problems: renderProblems, flows: renderFlows, packets: renderPackets }, views);
   let fn = R[S.tab];
-  if (!fn && !S.A) {
+  if (!fn && S.tab === 'settings' && typeof window.__PL_renderSettings === 'function') fn = window.__PL_renderSettings;
+  if (!fn && S.tab === 'ptentes' && typeof window.__PL_renderPtentes === 'function') fn = window.__PL_renderPtentes;
+  if (!fn && (S.tab === 'settings' || S.tab === 'ptentes')) {
     v.innerHTML = `<div class="empty-note">${esc(T('Görünüm yüklenemedi. Sayfayı Ctrl+Shift+R (Mac: Cmd+Shift+R) ile yenileyin.'))}</div>`;
     return;
   }
@@ -275,7 +299,7 @@ function renderProblems(v) {
   if (S.query && S.query.test || S.flowFilter || S.pktSet || S.timeRange) { const nos = new Set(S.vis.map(p => p.no)); l = l.filter(pr => pr.pkts.some(n => nos.has(n))); }
   const cnt = { all: l.length, sec: 0, perf: 0, net: 0 }; l.forEach(pr => cnt[catOf(pr.type)]++);
   const shown = S.probCat === 'all' ? l : l.filter(pr => catOf(pr.type) === S.probCat);
-  const devChip = S._devProbIp ? `<button class="chip on" data-act="clrdevprob">Cihaz: ${esc(S._devProbIp)} ✕</button>` : '';
+  const devChip = S._devProbIp ? `<button class="chip on" data-act="clrdevprob">Cihaz: ${esc(S._devProbIp)} · temizle</button>` : '';
   v.innerHTML = `<div class="toolbar">${devChip}${[['all', 'Hepsi'], ['sec', 'Güvenlik'], ['perf', 'Performans'], ['net', 'Ağ / bağlantı']].map(([k, t]) => `<button class="chip ${S.probCat === k ? 'on' : ''}" data-act="probcat" data-v="${k}">${t} (${cnt[k]})</button>`).join('')}</div>` +
     (shown.length ? shown.map(probHTML).join('') : `<div class="empty-note">${S.A.problems.length ? 'Bu filtreyle eşleşen sorun yok.' : '✓ Bu yakalamada sorun bulunamadı.'}</div>`);
 }
@@ -364,7 +388,7 @@ function renderDetail() {
 }
 
 /* ---------- Çekmece ---------- */
-function openDrawer(html) { $('#drawer').innerHTML = `<button class="btn dr-close" data-act="closedr">Kapat ✕</button>${html}`; $('#drawer').hidden = false; $('#drawer-bg').hidden = false; $('#drawer').scrollTop = 0; }
+function openDrawer(html) { $('#drawer').innerHTML = `<button class="btn dr-close" data-act="closedr">Kapat</button>${html}`; $('#drawer').hidden = false; $('#drawer-bg').hidden = false; $('#drawer').scrollTop = 0; }
 function closeDrawer() { $('#drawer').hidden = true; $('#drawer-bg').hidden = true; }
 function evtList(pkts) {
   const A = S.A;
@@ -373,7 +397,7 @@ function evtList(pkts) {
 function openFlow(id) {
   const A = S.A, f = A.flows[id - 1], pk = f.pnos.map(n => A.packets[n - 1]), X = window.PLApp.extra;
   openDrawer(`<h2>${esc(nm(f.client))} ↔ ${esc(nm(f.server))}</h2><p>${esc(PL.describeFlow(f, A))}</p>
-    <div class="row" style="justify-content:flex-start;margin:10px 0"><button class="btn sm primary" data-act="vfollow" data-v="${id}">⇄ Akışı takip et</button><button class="btn sm" data-act="flowpk" data-v="${id}">${S.mode === 'adv' ? 'Paketler sekmesinde aç' : 'Gelişmiş modda paketleri aç'}</button></div>
+    <div class="row" style="justify-content:flex-start;margin:10px 0"><button class="btn sm primary" data-act="vfollow" data-v="${id}">Akışı takip et</button><button class="btn sm" data-act="flowpk" data-v="${id}">${S.mode === 'adv' ? 'Paketler sekmesinde aç' : 'Gelişmiş modda paketleri aç'}</button></div>
     ${X && X.noteBox ? X.noteBox(id) : ''}
     ${X && X.tlsHTML ? X.tlsHTML(f) : ''}
     ${f.probs.length ? '<h3>Sorunlar</h3>' + f.probs.map(probHTML).join('') : '<p><span class="pill ok">sağlıklı</span> Bu bağlantıda sorun tespit edilmedi.</p>'}
@@ -388,7 +412,24 @@ function openProbPk(id) {
 }
 
 /* ---------- Canlı yakalama ---------- */
-const api = (path, opt) => fetch(path, opt).then(r => r.json().then(j => ({ ok: r.ok, j })).catch(() => ({ ok: r.ok, j: {} })));
+function api(path, opt) {
+  return fetch(path, Object.assign({ cache: 'no-store', headers: { Accept: 'application/json' } }, opt || {}))
+    .then(r => r.text().then(t => {
+      let j = {};
+      try { j = t ? JSON.parse(t) : {}; } catch (e) { /* geçersiz json */ }
+      return { ok: r.ok, status: r.status, j };
+    }))
+    .catch(() => ({ ok: false, status: 0, j: { error: T('Sunucuya ulaşılamadı') } }));
+}
+async function apiPollRunning(tries, gapMs) {
+  for (let i = 0; i < tries; i++) {
+    const chk = await api('/api/poll?since=0');
+    if (chk.ok && chk.j && chk.j.running) return chk;
+    if (chk.j && chk.j.error && !chk.j.running && i > 2) return chk;
+    if (i + 1 < tries) await new Promise(r => setTimeout(r, gapMs));
+  }
+  return api('/api/poll?since=0');
+}
 function b64u8(s) { const b = atob(s), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
 function maskBits(m) { return String(m).split('.').reduce((n, o) => n + (+o).toString(2).replace(/0/g, '').length, 0); }
 async function loadNet() { try { const { ok, j } = await api('/api/net'); if (ok) S.net = j; } catch (e) { /* yok say */ } }
@@ -459,11 +500,7 @@ async function initServer() {
     try {
       await loadNet();
       if (PL && PL.loadOui) await Promise.resolve(PL.loadOui());
-      const hint = $('#live-hint');
-      if (hint) {
-        if (!j.capture) hint.textContent = sysPlatformHint(j);
-        else hint.textContent = j.root ? 'Adaptör seçip üstteki çubuktan ▶ Başlat.' : 'Canlı yakalama için sudo ile başlatın (start.command / sudo python3 packetlens.py).';
-      }
+      if (!S.A && !S.live.running) renderLiveHome();
       if (window.PLApp && window.PLApp.checkUpdate) window.PLApp.checkUpdate(j.commit);
     } catch (e2) { /* yan etkiler sunucu bağlantısını bozmaz */ }
     renderLivebar();
@@ -477,26 +514,24 @@ async function initServer() {
     renderLivebar();
   }
 }
-function sysPlatformHint(j) {
-  if (j && j.platform === 'win32' && j.capture && j.capture_backend === 'dumpcap') {
-    return j.root ? 'Windows: canlı yakalama hazır (Npcap; monitör modu gerekmez).' : 'Windows: canlı yakalama için start.bat dosyasına sağ tık → Yönetici olarak çalıştır.';
-  }
-  if (j && j.platform === 'win32') return 'Windows: .pcap sürükleyin veya Wireshark+Npcap kurun.';
-  if (j && j.platform === 'darwin' && j.capture && j.capture_backend === 'tcpdump') {
-    return j.root ? 'macOS: canlı yakalama hazır (tcpdump).' : 'Canlı yakalama için start.command veya sudo python3 packetlens.py';
-  }
-  if (j && j.platform === 'darwin') return 'macOS: .pcap sürükleyin veya sudo ile canlı yakalama.';
-  if (j && j.platform && !j.platform.startsWith('linux')) return 'Bu ortamda yalnızca .pcap dosyası analizi.';
-  return 'Canlı yakalama kapalı (--no-capture).';
-}
-function isMacFileOnly() {
-  const s = S.srv;
-  return !!(s && s.platform === 'darwin' && !s.capture);
-}
 function canPressLiveStart(s) {
   if (!s || !s.capture) return false;
-  if (s.platform === 'darwin' || s.platform === 'win32') return true;
+  if (s.platform === 'darwin') return !!s.root;
+  if (s.platform === 'win32') return true;
   return !!s.root;
+}
+function pickDefaultIface(ifaces, st, s) {
+  const gw = S.net && S.net.gateway && S.net.gateway.iface;
+  const defIf = (ifaces.find(i => i.default) || {}).name;
+  let ifc = S.live.iface && S.live.iface !== 'any' ? S.live.iface : (st.iface || s.default_iface || defIf || 'any');
+  if (ifc !== 'any' && s.platform === 'darwin' && /^ap\d/i.test(ifc)) {
+    const alt = ifaces.find(i => i.name === gw && i.state === 'up')
+      || ifaces.find(i => /^en\d/i.test(i.name) && i.ipv4 && i.state === 'up')
+      || ifaces.find(i => /^en\d/i.test(i.name) && i.state === 'up');
+    if (alt) ifc = alt.name;
+  }
+  if (ifc !== 'any' && !ifaces.some(i => i.name === ifc)) ifc = gw || defIf || 'any';
+  return ifc;
 }
 function liveStartHint(s) {
   if (!s || s.root) return '';
@@ -506,82 +541,125 @@ function liveStartHint(s) {
 }
 function buildIfaceSelect(ifaces, ifc) {
   const kindTx = { ethernet: 'Ethernet', wifi: 'Wi-Fi', loopback: 'Loopback', virtual: 'Sanal', any: '' };
-  let opts = `<option value="any"${ifc === 'any' ? ' selected' : ''}>🌐 ${T('Tüm arayüzler')} (any)</option>`;
+  let opts = `<option value="any"${ifc === 'any' ? ' selected' : ''}>${T('Tüm arayüzler')} (any)</option>`;
   for (const i of ifaces) {
     const bits = [i.label || i.name, T(kindTx[i.kind] || 'Ethernet'), i.state === 'up' ? T('bağlı') : T('kapalı')];
+    if (/^ap\d/i.test(i.name)) bits.push(T('yakalama için önerilmez'));
     if (i.ipv4) bits.push(i.ipv4);
-    if (i.default) bits.push('★ ' + T('internet çıkışı'));
+    if (i.default) bits.push(T('internet çıkışı'));
     opts += `<option value="${esc(i.name)}"${ifc === i.name ? ' selected' : ''}>${esc(bits.join(' · '))}</option>`;
   }
   return `<label class="live-lab">${T('Ağ adaptörü')}</label><select id="iface" class="ifsel">${opts}</select>`;
 }
+function isHomeScreen() {
+  const home = $('#home');
+  return !!(home && !home.hidden);
+}
+function syncScreen() {
+  const aux = S.tab === 'settings' || S.tab === 'ptentes';
+  const showApp = !!(S.A || S.live.running || aux);
+  const home = $('#home'), app = $('#app');
+  if (home) home.hidden = showApp;
+  if (app) app.hidden = !showApp;
+  if (!showApp) renderLiveHome();
+  else syncHeaderLiveBtn();
+}
+function buildLivePanelBody(s) {
+  const cmd = '<span class="mono">sudo python3 packetlens.py</span>';
+  if (!s) {
+    let msg;
+    if (srvInit === 'file') msg = 'Sayfa dosyadan (file://) açılmış. Terminalde <span class="mono">sudo python3 packetlens.py</span> çalıştırıp <span class="mono">http://127.0.0.1:…</span> adresini açın.';
+    else if (srvInit === 'loading') msg = T('Sunucuya bağlanılıyor…');
+    else if (srvInit === 'fail' && srvInitDetail === 'stale') msg = 'Portta <b>eski</b> PacketLens çalışıyor. <span class="mono">pkill -f packetlens.py</span> → sunucuyu yeniden başlatın → <b>Ctrl+Shift+R</b>.';
+    else if (srvInit === 'fail' && srvInitDetail === 'host') msg = 'Adres çubuğu <span class="mono">http://127.0.0.1:' + (location.port || '8765') + '</span> olmalı.';
+    else if (srvInit === 'fail' && srvInitDetail === '404') msg = 'Bu adreste PacketLens API yok. Terminalde <span class="mono">sudo python3 packetlens.py</span> ile başlatın.';
+    else if (srvInit === 'fail' && srvInitDetail === '500') msg = 'Sunucu hatası (/api/info). Terminal çıktısına bakın.';
+    else if (srvInit === 'fail') msg = 'Tarayıcı API’ye ulaşamadı.' + liveConnectHint();
+    else msg = `Sunucu bilinmiyor. Terminalde: ${cmd}`;
+    return `<p class="live-home-msg">${msg}</p><div class="live-home-meta"><button class="btn sm" data-act="retry-srv">${T('Yeniden dene')}</button></div>`;
+  }
+  if (!s.capture && s.platform === 'darwin') {
+    return `<p class="live-home-msg">Canlı yakalama için <span class="mono">start.command</span> (sudo) ile başlatın. Kayıtlı dosya için <b>Menü → Dosya aç</b>.</p>`;
+  }
+  if (!s.capture) {
+    const plat = (s.platform === 'win32') ? ' Windows’ta Npcap kurulunca canlı yakalama açılır.' : '';
+    return `<p class="live-home-msg">Canlı yakalama bu ortamda kapalı.${plat} Kayıtlı dosya için <b>Menü → Dosya aç</b>.</p>`;
+  }
+  const ifaces = s.interfaces || [], st = S.set, ifc = pickDefaultIface(ifaces, st, s);
+  const opts = [st.duration ? T(st.duration + ' sn sonra otomatik durur') : T('süre sınırı yok'), T('en fazla ' + st.max.toLocaleString(L()) + ' paket'), st.promisc ? T('promiscuous açık') : T('promiscuous kapalı')].join(' · ');
+  const gw = S.net && S.net.gateway && S.net.gateway.ip ? `<span class="muted small">${T('Ağ geçidi')}: <span class="mono">${esc(S.net.gateway.ip)}</span>${S.net.dns && S.net.dns.length ? ' · DNS: <span class="mono">' + esc(S.net.dns.slice(0, 2).join(', ')) + '</span>' : ''}</span>` : '';
+  return `<div class="live-home-form">${buildIfaceSelect(ifaces, ifc)}${gw}
+    <input id="capf" class="capf" value="${esc(S.live.filter != null && S.live.since ? S.live.filter : (S.live.filter || st.capfilter || ''))}" placeholder="${esc(T('Yakalama filtresi (isteğe bağlı): host 192.168.1.5 and port 443'))}" spellcheck="false" autocomplete="off">
+    <button class="btn primary" data-act="livestart" ${canPressLiveStart(s) ? '' : 'disabled'}>${T('Başlat')}</button></div>
+    <div class="live-home-meta"><span class="muted small">${opts} · <a href="#" data-act="settings">${T('değiştir')}</a></span>${liveStartHint(s)}</div>`;
+}
+function renderLiveHome() {
+  const panel = $('#live-home'), idle = $('#home-idle'), after = $('#live-after');
+  if (!panel) return;
+  if (idle) idle.hidden = true;
+  if (S.live.running) { panel.innerHTML = ''; return; }
+  if (S.liveOpen && after) after.hidden = true;
+  const fileHint = `${T('Kayıtlı dosya için')} <b>${T('Menü → Dosya aç')}</b>.`;
+  if (!S.liveOpen) {
+    panel.innerHTML = `<div class="card live-welcome-card">
+      <p class="live-welcome-lead">${T('Ağ trafiğini gerçek zamanlı yakalayıp uygulamalara, bağlantılara ve sorunlara ayırın.')}</p>
+      <p class="live-welcome-sub muted">${fileHint}</p>
+      <div class="live-welcome-actions"><button type="button" class="btn primary" data-act="analyze">${T('Canlı analiz')}</button></div>
+    </div>`;
+    syncHeaderLiveBtn();
+    return;
+  }
+  panel.innerHTML = `<div class="card live-home-card">
+    <div class="live-home-head"><h2>${T('Canlı yakalama')}</h2><button type="button" class="btn sm" data-act="analyze">${T('Kapat')}</button></div>
+    ${buildLivePanelBody(S.srv)}</div>`;
+  syncHeaderLiveBtn();
+}
 function goHomeScreen(afterStop) {
   S.liveOpen = false;
   closeDrawer();
-  $('#empty').hidden = false;
-  $('#app').hidden = true;
-  const hint = $('#live-hint');
-  if (hint && afterStop && S.pk.length && S.A) {
-    hint.innerHTML = `${S.pk.length.toLocaleString(L())} paket yakalandı. <button type="button" class="btn sm primary" data-act="view-capture">${T('Yakalamayı incele')}</button>`;
-  } else if (hint && S.srv) hint.textContent = sysPlatformHint(S.srv);
+  const after = $('#live-after');
+  if (after && afterStop && S.pk.length && S.A) {
+    after.hidden = false;
+    after.innerHTML = `${S.pk.length.toLocaleString(L())} paket yakalandı. <button type="button" class="btn sm primary" data-act="view-capture">${T('Yakalamayı incele')}</button>`;
+  } else if (after) after.hidden = true;
+  syncScreen();
   renderLivebar();
 }
 function syncHeaderLiveBtn() {
   const b = $('#b-live');
-  if (!b || S.live.running) return;
-  if (isMacFileOnly()) {
-    b.textContent = '📂 Dosya aç';
-    b.className = 'btn primary big';
-    b.dataset.act = 'open';
-    b.title = 'macOS: .pcap / .pcapng dosyası';
+  if (!b) return;
+  if (isHomeScreen() && !S.live.running) {
+    b.hidden = true;
     return;
   }
+  b.hidden = false;
   b.removeAttribute('title');
+  if (S.live.running) {
+    b.textContent = T('Durdur');
+    b.className = 'btn danger';
+    b.dataset.act = 'livestop';
+    return;
+  }
   if (S.liveOpen) {
-    b.textContent = '✕ Kapat';
-    b.className = 'btn big';
+    b.textContent = T('Kapat');
+    b.className = 'btn';
     b.dataset.act = 'analyze';
   } else {
-    b.textContent = '▶ Canlı analiz';
-    b.className = 'btn primary big';
+    b.textContent = T('Canlı analiz');
+    b.className = 'btn primary';
     b.dataset.act = 'analyze';
   }
 }
 function renderLivebar() {
-  const bar = $('#livebar'), s = S.srv, b = $('#b-live');
-  if (S.live.running) { b.textContent = '■ Durdur'; b.className = 'btn danger big'; b.dataset.act = 'livestop'; }
-  else syncHeaderLiveBtn();
-  if (!S.live.running && !S.liveOpen) { bar.hidden = true; return; }
-  bar.hidden = false;
-  const cmd = '<span class="mono">sudo python3 packetlens.py</span>';
-  if (S.live.running) {
-    bar.innerHTML = `<span class="rec">CANLI</span><span class="muted">${esc(S.live.iface)}${S.live.filter ? ' · filtre: <span class="mono">' + esc(S.live.filter) + '</span>' : ''} · <b id="livecount">${S.pk.length}</b> paket</span><button class="btn danger sm" data-act="livestop">Durdur</button><a class="btn sm" href="/api/save" download>.pcap olarak kaydet</a>`;
-  } else if (!s) {
-    let msg;
-    if (srvInit === 'file') msg = 'Sayfa dosyadan (file://) açılmış. Kali terminalinde <span class="mono">sudo python3 packetlens.py</span> çalıştırıp terminalde yazan <span class="mono">http://127.0.0.1:…</span> adresini açın.';
-    else if (srvInit === 'loading') msg = 'Sunucuya bağlanılıyor…';
-    else if (srvInit === 'fail' && srvInitDetail === 'stale') msg = 'Portta <b>eski</b> PacketLens çalışıyor (token istiyor). Kali’de: <span class="mono">pkill -f packetlens.py</span> → <span class="mono">sudo python3 packetlens.py</span> → sayfayı <b>Ctrl+Shift+R</b> ile yenileyin.';
-    else if (srvInit === 'fail' && srvInitDetail === 'host') msg = 'Host reddedildi. Adres çubuğu <span class="mono">http://127.0.0.1:' + (location.port || '8765') + '</span> olmalı.';
-    else if (srvInit === 'fail' && srvInitDetail === '404') msg = 'Bu adreste PacketLens API yok (yanlış sunucu?). Terminalde <span class="mono">./start.sh</span> veya <span class="mono">sudo python3 packetlens.py</span> ile başlatın.';
-    else if (srvInit === 'fail' && srvInitDetail === '500') msg = 'Sunucu hatası (/api/info). Terminal penceresindeki hata satırına bakın; güncel kodu çekip sunucuyu yeniden başlatın.';
-    else if (srvInit === 'fail') msg = 'Tarayıcı API’ye ulaşamadı. Terminalde <span class="mono">curl</span> JSON dönüyorsa <b>Ctrl+Shift+R</b> ile yenileyin veya <b>Yeniden dene</b>.' + liveConnectHint();
-    else msg = `Sunucu bilinmiyor. Kali terminalinde: ${cmd}`;
-    bar.innerHTML = `<b>Canlı analiz</b><span class="muted">${msg}</span><button class="btn sm" data-act="retry-srv">Yeniden dene</button><button class="btn sm ghost" data-act="analyze">Kapat ✕</button>`;
-  } else if (!s.capture && s.platform === 'darwin') {
-    bar.innerHTML = `<b>Dosya analizi</b><span class="muted">Canlı yakalama için <span class="mono">start.command</span> (sudo). .pcap dosyası için Dosya seç.</span>
-      <button class="btn sm primary" data-act="open">Dosya seç</button>`;
-  } else if (!s.capture) {
-    const plat = (s.platform === 'win32') ? ' Windows’ta Npcap kurulunca canlı yakalama açılır.' : '';
-    bar.innerHTML = `<b>Canlı analiz</b><span class="muted">Canlı yakalama kapalı.${plat} .pcap dosyası sürükleyin.</span><button class="btn sm" data-act="open">Dosya seç</button>`;
-  } else {
-    const ifaces = s.interfaces || [], st = S.set, defIf = (ifaces.find(i => i.default) || {}).name, ifc = S.live.iface && S.live.iface !== 'any' ? S.live.iface : (st.iface || s.default_iface || defIf || 'any');
-    const opts = [st.duration ? T(st.duration + ' sn sonra otomatik durur') : T('süre sınırı yok'), T('en fazla ' + st.max.toLocaleString(L()) + ' paket'), st.promisc ? T('promiscuous açık') : T('promiscuous kapalı')].join(' · ');
-    const gw = S.net && S.net.gateway && S.net.gateway.ip ? `<span class="muted small">${T('Ağ geçidi')}: <span class="mono">${esc(S.net.gateway.ip)}</span>${S.net.dns && S.net.dns.length ? ' · DNS: <span class="mono">' + esc(S.net.dns.slice(0, 2).join(', ')) + '</span>' : ''}</span>` : '';
-    bar.innerHTML = `${buildIfaceSelect(ifaces, ifc)}${gw}<input id="capf" class="capf" value="${esc(S.live.filter != null && S.live.since ? S.live.filter : (S.live.filter || st.capfilter || ''))}" placeholder="Yakalama filtresi (isteğe bağlı): host 192.168.1.5 and port 443" spellcheck="false" autocomplete="off">
-      <button class="btn primary big" data-act="livestart" ${canPressLiveStart(s) ? '' : 'disabled'}>▶ Başlat</button>
-      <span class="muted small">${opts} · <a href="#" data-act="settings">değiştir</a></span>
-      ${liveStartHint(s)}`;
+  const bar = $('#livebar'), b = $('#b-live');
+  syncHeaderLiveBtn();
+  if (!S.live.running) {
+    if (bar) bar.hidden = true;
+    renderLiveHome();
+    return;
   }
+  bar.hidden = false;
+  bar.innerHTML = `<span class="rec">CANLI</span><span class="muted">${esc(S.live.iface)}${S.live.filter ? ' · filtre: <span class="mono">' + esc(S.live.filter) + '</span>' : ''} · <b id="livecount">${S.pk.length}</b> paket</span><button class="btn danger sm" data-act="livestop">Durdur</button><a class="btn sm" href="/api/save" download>.pcap olarak kaydet</a>`;
 }
 async function liveStart() {
   const s = S.srv;
@@ -589,34 +667,75 @@ async function liveStart() {
     toast('Canlı yakalama için sunucuyu sudo ile başlatın (start.command veya sudo python3 packetlens.py --restart)');
     return;
   }
-  const ifaceEl = $('#iface'), capEl = $('#capf');
-  const iface = ifaceEl ? ifaceEl.value : 'any';
-  const flt = (capEl && capEl.value ? capEl.value : '').trim();
-  const st = S.set;
-  const qs = `iface=${encodeURIComponent(iface)}&filter=${encodeURIComponent(flt)}&snap=${st.snap}&max=${st.max}&duration=${st.duration}&promisc=${st.promisc ? 1 : 0}`;
-  const { ok, j } = await api('/api/start?' + qs, { method: 'POST' });
-  if (!ok || j.ok === false) { toast(j.error || 'Başlatılamadı'); return; }
-  S.liveOpen = false;
-  S.live.running = true; S.live.since = 0; S.live.iface = iface; S.live.filter = flt; S.timeRange = null; S.pk = []; S.raw = []; S.selPkt = null; S.flowFilter = null; S.pktSet = null; S.find = null; S.appColors.clear();
-  $('#empty').hidden = true; $('#app').hidden = false;
-  S.A = PL.analyze([]); S.A.nm = ip => ip; S.vis = []; S.visFlows = new Set();
-  if (S.tab === 'settings') S.tab = 'summary';
-  if (S.mode === 'adv') S.tab = 'packets';
-  renderLivebar(); render(); livePoll(); S.live.timer = setInterval(livePoll, 700);
+  if (liveStart.busy) return;
+  liveStart.busy = true;
+  const startBtn = document.querySelector('[data-act="livestart"]');
+  const prevBtn = startBtn ? startBtn.textContent : '';
+  if (startBtn) { startBtn.disabled = true; startBtn.textContent = T('Başlatılıyor…'); }
+  try {
+    const ifaceEl = $('#iface'), capEl = $('#capf');
+    let iface = ifaceEl ? ifaceEl.value : 'any';
+    if (s && s.platform === 'darwin' && /^ap\d/i.test(iface)) {
+      const ifaces = s.interfaces || [];
+      const gw = S.net && S.net.gateway && S.net.gateway.iface;
+      const alt = ifaces.find(i => i.name === gw) || ifaces.find(i => /^en\d/i.test(i.name) && i.ipv4);
+      if (alt) {
+        iface = alt.name;
+        toast(T('ap arayüzü yerine') + ' ' + iface + ' ' + T('kullanılıyor'));
+        if (ifaceEl) ifaceEl.value = iface;
+      }
+    }
+    const flt = (capEl && capEl.value ? capEl.value : '').trim();
+    const st = S.set;
+    const qs = `iface=${encodeURIComponent(iface)}&filter=${encodeURIComponent(flt)}&snap=${st.snap}&max=${st.max}&duration=${st.duration}&promisc=${st.promisc ? 1 : 0}`;
+    const { ok, j } = await api('/api/start?' + qs, { method: 'POST' });
+    if (!ok || j.ok === false) { toast(j.error || T('Başlatılamadı')); return; }
+    const chk = await apiPollRunning(12, 120);
+    if (!chk.ok || !chk.j || !chk.j.running) {
+      toast((chk.j && chk.j.error) || T('Yakalama başlayamadı. Arayüzü (en0) ve sudo ile başlatmayı deneyin.'));
+      await api('/api/stop', { method: 'POST' });
+      return;
+    }
+    const pl = getPL();
+    if (!pl) {
+      toast(T('Analiz modülü yüklenemedi. Sayfayı Cmd+Shift+R ile yenileyin.'));
+      await api('/api/stop', { method: 'POST' });
+      return;
+    }
+    S.liveOpen = false;
+    S.live.since = 0; S.live.iface = iface; S.live.filter = flt; S.timeRange = null; S.pk = []; S.raw = []; S.selPkt = null; S.flowFilter = null; S.pktSet = null; S.find = null; S.appColors.clear();
+    S.A = pl.analyze([]); S.A.nm = ip => ip; S.vis = []; S.visFlows = new Set();
+    S.live.running = true;
+    syncScreen();
+    if (S.tab === 'settings') S.tab = 'summary';
+    if (S.mode === 'adv') S.tab = 'packets';
+    renderLivebar(); render(); livePoll(); S.live.timer = setInterval(livePoll, 700);
+  } catch (e) {
+    toast(e && e.message ? e.message : T('Sunucuya ulaşılamadı'));
+  } finally {
+    liveStart.busy = false;
+    if (startBtn) { startBtn.disabled = false; startBtn.textContent = prevBtn || T('Başlat'); }
+    renderLivebar();
+  }
 }
 async function livePoll() {
   if (livePoll.busy) return; livePoll.busy = true;
   try {
     const { ok, j } = await api('/api/poll?since=' + S.live.since); if (!ok) return;
     if (j.error) { toast(j.error); }
-    if (j.packets.length) {
-      for (const [ts, len, b] of j.packets) { const r = { ts, len, data: b64u8(b), link: 1 }; S.raw.push(r); S.pk.push(PL.dissect(r, S.pk.length + 1)); }
+    if (j.packets && j.packets.length) {
+      const pl = getPL(); if (!pl) return;
+      for (const [ts, len, b] of j.packets) { const r = { ts, len, data: b64u8(b), link: 1 }; S.raw.push(r); S.pk.push(pl.dissect(r, S.pk.length + 1)); }
       S.live.since += j.packets.length;
       if (S.pk.length < 20000 || Date.now() - (S.live.last || 0) > 3000) { reanalyze(false); S.live.last = Date.now(); }
       const c = $('#livecount'); if (c) c.textContent = S.pk.length.toLocaleString(L());
       if (S.tab === 'packets' && $('#pkb')) { renderChrome(); updatePacketList(); } else render();
     }
-    if (!j.running && S.live.running) { stopLiveUI(); goHomeScreen(true); toast('Yakalama sona erdi'); }
+    if (!j.running && S.live.running) {
+      stopLiveUI();
+      goHomeScreen(true);
+      toast(j.error || T('Yakalama sona erdi'));
+    }
   } catch (e) { /* ağ hatası: bir sonraki turda tekrar dener */ } finally { livePoll.busy = false; }
 }
 function stopLiveUI() { S.live.running = false; clearInterval(S.live.timer); S.live.timer = null; renderLivebar(); }
@@ -650,30 +769,46 @@ document.addEventListener('click', e => {
   const el = e.target.closest('[data-act]'); if (!el) return;
   const act = el.dataset.act, v = el.dataset.v;
   if (el.tagName === 'A') e.preventDefault();
-  if (el.classList.contains('menu-item')) { const mp = $('#menu-pop'); if (mp) mp.hidden = true; }
   switch (act) {
-    case 'mode': S.mode = v; try { localStorage.setItem('pl-mode', v); } catch (x) { /* yok say */ } if (S.mode === 'simple' && ['packets', 'stats', 'logs'].includes(S.tab)) S.tab = 'flows'; render(); renderChrome(); break;
+    case 'mode':
+      S.mode = v;
+      try { localStorage.setItem('pl-mode', v); } catch (x) { /* yok say */ }
+      if (S.mode === 'simple' && ['packets', 'stats', 'logs', 'ptentes'].includes(S.tab)) S.tab = 'flows';
+      else if (S.mode === 'adv' && !S.A && S.tab !== 'settings') { S.tab = 'ptentes'; syncScreen(); }
+      render(); renderChrome();
+      break;
     case 'menu': { const p = $('#menu-pop'); p.hidden = !p.hidden; $('#b-menu').setAttribute('aria-expanded', String(!p.hidden)); return; }
+    case 'home':
+      S.tab = 'summary';
+      S.liveOpen = false;
+      syncScreen();
+      renderLivebar();
+      render();
+      break;
     case 'open': $('#file').click(); break;
     case 'pickif': { const c = $('#capf'); if (c) S.live.filter = c.value; S.live.iface = v; S.set.iface = v; renderLivebar(); return; }
     case 'retry-srv': initServer().then(() => renderLivebar()); break;
     case 'analyze':
-      if (isMacFileOnly()) {
-        S.liveOpen = !S.liveOpen;
-        if (!S.liveOpen) { renderLivebar(); break; }
-        renderLivebar();
-        break;
-      }
       S.liveOpen = !S.liveOpen;
-      if (S.liveOpen && !S.srv) initServer().then(() => renderLivebar());
-      else if (S.liveOpen) loadNet().then(renderLivebar);
+      if (!S.live.running && !S.A && (S.tab === 'settings' || S.tab === 'ptentes')) S.tab = 'summary';
+      if (S.liveOpen) {
+        if (!S.srv) initServer().then(() => renderLivebar());
+        else loadNet().then(renderLivebar);
+      }
+      syncScreen();
       renderLivebar();
       if (S.liveOpen) { const c = $('#capf'); if (c) c.focus(); }
       break;
-    case 'settings': S.tab = S.tab === 'settings' ? (S.A ? 'summary' : 'summary') : 'settings'; if (S.tab === 'settings') { $('#empty').hidden = true; $('#app').hidden = false; } else if (!S.A) { $('#empty').hidden = false; $('#app').hidden = true; } S.liveOpen = false; renderLivebar(); render(); break;
-    case 'ptentes': S.mode = 'adv'; try { localStorage.setItem('pl-mode', 'adv'); } catch (x) { /* yok say */ } S.tab = 'ptentes'; $('#empty').hidden = true; $('#app').hidden = false; S.liveOpen = false; renderLivebar(); render(); break;
+    case 'settings':
+      S.tab = 'settings';
+      S.liveOpen = false;
+      syncScreen();
+      renderLivebar();
+      render();
+      break;
+    case 'ptentes': S.mode = 'adv'; try { localStorage.setItem('pl-mode', 'adv'); } catch (x) { /* yok say */ } S.tab = 'ptentes'; S.liveOpen = false; syncScreen(); renderLivebar(); render(); break;
     case 'lang': S.set.lang = v; saveSettings(); applySettings(false); render(); renderLivebar(); if (window.PLI) window.PLI.apply(document.body); break;
-    case 'tab': S.tab = v; if ((S.tab === 'settings' || S.tab === 'ptentes') && !S.A) { $('#empty').hidden = true; $('#app').hidden = false; } render(); break;
+    case 'tab': S.tab = v; syncScreen(); render(); break;
     case 'clearq': setQuery(''); break;
     case 'try': setQuery(v); break;
     case 'clrflow': S.flowFilter = null; computeVisible(); render(); break;
@@ -698,8 +833,9 @@ document.addEventListener('click', e => {
     case 'closedr': closeDrawer(); break;
     case 'livestart': liveStart(); break;
     case 'livestop': liveStop(); break;
-    case 'view-capture': { $('#empty').hidden = true; $('#app').hidden = false; const h = $('#live-hint'); if (h) h.textContent = ''; render(); break; }
+    case 'view-capture': { const a = $('#live-after'); if (a) a.hidden = true; S.liveOpen = false; syncScreen(); render(); break; }
   }
+  if (el.closest('#menu-pop') && act !== 'menu') closeMenu();
 });
 document.addEventListener('change', e => {
   if (e.target.id !== 'iface') return;
@@ -716,23 +852,35 @@ document.addEventListener('keydown', e => {
 let qt; $('#q').addEventListener('input', e => { clearTimeout(qt); qt = setTimeout(() => setQuery(e.target.value), 160); });
 let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (S.A && S.tab === 'summary') render(); }, 200); });
 $('#q').addEventListener('keydown', e => { if (e.key === 'Enter') { clearTimeout(qt); setQuery(e.target.value); } });
-document.addEventListener('click', e => { const p = $('#menu-pop'); if (p && !p.hidden && !e.target.closest('#menu')) p.hidden = true; });
-document.addEventListener('keydown', e => { if (e.key === 'Escape') { const p = $('#menu-pop'); if (p) p.hidden = true; } });
+document.addEventListener('click', e => {
+  if (e.target.closest('#menu')) return;
+  closeMenu();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeMenu(); });
 $('#file').addEventListener('change', e => { if (e.target.files[0]) loadFile(e.target.files[0]); e.target.value = ''; });
-['dragover', 'dragenter'].forEach(t => document.addEventListener(t, e => { e.preventDefault(); const d = $('#drop'); if (d) d.classList.add('over'); }));
-['dragleave', 'drop'].forEach(t => document.addEventListener(t, e => { e.preventDefault(); const d = $('#drop'); if (d) d.classList.remove('over'); }));
+['dragover', 'dragenter'].forEach(t => document.addEventListener(t, e => { e.preventDefault(); document.body.classList.add('pcap-drag'); }));
+['dragleave', 'drop'].forEach(t => document.addEventListener(t, e => { e.preventDefault(); document.body.classList.remove('pcap-drag'); }));
 document.addEventListener('drop', e => { const f = e.dataTransfer && e.dataTransfer.files[0]; if (f) loadFile(f); });
 
 applySettings(false);
+if (!getPL()) toast(T('Analiz modülü yüklenemedi. Sayfayı Cmd+Shift+R ile yenileyin.'));
 renderChrome();
+syncScreen();
 renderLivebar();
 initServer().then(() => syncHeaderLiveBtn());
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && S.liveOpen && !S.srv && srvInit === 'fail') initServer().then(() => renderLivebar());
 });
-window.PLApp = { S, PL, PLF, $, esc, fmtB, fmtD, fmtRate, rel, nm, toast, appColor, setQuery, render, renderChrome, computeVisible, openDrawer, closeDrawer, selectPacket, pSev, evtList, views: {}, extra: {},
-  DEFAULTS, saveSettings, applySettings, reanalyze, ingest, loadBuffer, renderLivebar, L, tcol, drawRows, updatePacketList, probHTML, SEC, PERF, catOf, api,
-  goPacket(no) { closeDrawer(); S.tab = 'packets'; render(); selectPacket(no, true); } };
+const _plViews = (window.PLApp && window.PLApp.views) || {};
+const _plExtra = (window.PLApp && window.PLApp.extra) || {};
+Object.assign(window.PLApp || (window.PLApp = {}), {
+  S, get PL() { return window.PL; }, PLF, getPL, $, esc, fmtB, fmtD, fmtRate, rel, nm, toast, appColor, setQuery, render, renderChrome, computeVisible, openDrawer, closeDrawer, selectPacket, pSev, evtList,
+  views: _plViews, extra: _plExtra,
+  DEFAULTS, saveSettings, applySettings, reanalyze, ingest, loadBuffer, syncScreen, renderLiveHome, renderLivebar, L, tcol, drawRows, updatePacketList, probHTML, SEC, PERF, catOf, api,
+  goPacket(no) { closeDrawer(); S.tab = 'packets'; render(); selectPacket(no, true); },
+});
+if (window.__PL_renderSettings) window.PLApp.views.settings = window.__PL_renderSettings;
+if (window.__PL_renderPtentes) window.PLApp.views.ptentes = window.__PL_renderPtentes;
 window.__PL = { S, parseQuery };
 })();
 if (window.PLI) window.PLI.apply(document.body);

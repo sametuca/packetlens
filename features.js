@@ -1,7 +1,8 @@
 /* PacketLens - ek özellikler: Ayarlar, Siteler, HTTP dosyaları, dışa aktarma/rapor/anonimleştirme, filtre kütüphanesi, içerik arama, notlar */
 (function () {
 'use strict';
-const X = window.PLApp; if (!X) return;
+const X = window.PLApp;
+if (!X || !X.S) return;
 const { S, PL, esc, fmtB, fmtD, nm, toast, $ } = X;
 const PLF = window.PLF;
 const T = s => (window.PLI ? window.PLI.t(s) : s);
@@ -16,7 +17,7 @@ function download(name, data, mime) {
 const filtering = () => !!(S.query && S.query.test) || !!S.flowFilter || !!S.pktSet || !!S.timeRange;
 function openModal(title, html, cls) {
   const m = $('#modal');
-  m.innerHTML = `<div class="modal-bg" data-act="fm-close"></div><div class="modal ${cls || 'auto'}" role="dialog" aria-label="${esc(title)}"><div class="modal-head"><b>${esc(title)}</b><button class="btn sm" data-act="fm-close">Kapat ✕</button></div><div class="modal-body">${html}</div></div>`;
+  m.innerHTML = `<div class="modal-bg" data-act="fm-close"></div><div class="modal ${cls || 'auto'}" role="dialog" aria-label="${esc(title)}"><div class="modal-head"><b>${esc(title)}</b><button class="btn sm" data-act="fm-close">${T('Kapat')}</button></div><div class="modal-body">${html}</div></div>`;
   m.hidden = false;
 }
 const closeModal = () => { const m = $('#modal'); if (m) m.hidden = true; };
@@ -37,7 +38,7 @@ function renderSettings(v) {
   const st = S.set, srv = S.srv;
   const ifs = srv && srv.interfaces ? `<select data-set="iface"><option value="">Otomatik</option><option value="any" ${st.iface === 'any' ? 'selected' : ''}>Tüm arayüzler</option>${srv.interfaces.map(i => `<option value="${esc(i.name)}" ${st.iface === i.name ? 'selected' : ''}>${esc(i.name)}</option>`).join('')}</select>` : '<input type="text" data-set="iface" value="' + esc(st.iface) + '" placeholder="eth0">';
   v.innerHTML = `
-  <div class="set-head"><h2>Ayarlar</h2>${S.A ? '' : '<button class="btn" data-act="settings">← Geri</button>'}<span class="muted small">Değişiklikler otomatik kaydedilir (bu tarayıcıda).</span></div>
+  <div class="set-head"><h2>Ayarlar</h2>${S.A ? '' : `<button class="btn" data-act="home">${T('Geri')}</button>`}<span class="muted small">Değişiklikler otomatik kaydedilir (bu tarayıcıda).</span></div>
   <div class="grid g2">
     <div class="card"><h3>Genel</h3>
       ${row('Dil', 'Arayüz dili', sel('lang', [['tr', 'Türkçe'], ['en', 'English']], st.lang))}
@@ -72,7 +73,7 @@ function renderSettings(v) {
   </div>
   <div class="grid g2" style="margin-top:14px">
     <div class="card"><h3>Kayıtlı filtreler</h3>
-      <div class="muted small" style="margin-bottom:8px">Arama kutusunun altında ★ ile görünür. Sık kullandığınız filtreleri buraya ekleyin.</div>
+      <div class="muted small" style="margin-bottom:8px">Arama kutusunun altında kayıtlı filtre olarak görünür. Sık kullandığınız filtreleri buraya ekleyin.</div>
       ${(st.presets || []).length ? table(['Ad', 'Filtre', ''], st.presets.map((p, i) => `<tr><td>${esc(p.n)}</td><td class="mono">${esc(p.f)}</td><td class="num"><button class="btn sm" data-act="fs-delpreset" data-v="${i}">Sil</button></td></tr>`)) : '<div class="empty-note" style="padding:10px">Henüz kayıtlı filtre yok.</div>'}
       <div class="toolbar" style="margin-top:10px"><input type="text" id="pn" placeholder="Ad (örn. Şüpheli DNS)" style="width:170px"><input type="text" id="pf" class="wide" placeholder="Filtre (örn. dns.time > 0.5)" spellcheck="false"><button class="btn sm primary" data-act="fs-addpreset">Ekle</button></div></div>
     <div class="card"><h3>Veri ve gizlilik</h3>
@@ -252,7 +253,7 @@ const FU = { q: '', mode: 'text', cs: false };
 function findBar() {
   const n = S.find ? S.find.nos.length : 0;
   return `<div class="pk-find"><input id="fq" type="search" value="${esc(FU.q)}" placeholder="Paket içeriğinde ara (metin, hex veya regex)…" spellcheck="false" autocomplete="off"><select id="fmode"><option value="text" ${FU.mode === 'text' ? 'selected' : ''}>Metin</option><option value="hex" ${FU.mode === 'hex' ? 'selected' : ''}>Hex</option><option value="re" ${FU.mode === 're' ? 'selected' : ''}>Regex</option></select>
-    <label class="chk" title="Büyük/küçük harf duyarlı"><input type="checkbox" id="fcs" ${FU.cs ? 'checked' : ''}> Aa</label><button class="btn sm" data-act="f-find">Ara</button><button class="btn sm" data-act="f-prev" title="Önceki">◀</button><button class="btn sm" data-act="f-next" title="Sonraki">▶</button><span class="muted small" id="fres">${S.find ? (n ? `${S.find.idx + 1} / ${n} eşleşme` : 'eşleşme yok') : ''}</span></div>`;
+    <label class="chk" title="Büyük/küçük harf duyarlı"><input type="checkbox" id="fcs" ${FU.cs ? 'checked' : ''}> Aa</label><button class="btn sm" data-act="f-find">Ara</button><button class="btn sm" data-act="f-prev">Önceki</button><button class="btn sm" data-act="f-next">Sonraki</button><span class="muted small" id="fres">${S.find ? (n ? `${S.find.idx + 1} / ${n} eşleşme` : 'eşleşme yok') : ''}</span></div>`;
 }
 const latin1 = u8 => { let s = ''; for (let i = 0; i < u8.length; i += 8192) s += String.fromCharCode.apply(null, u8.subarray(i, i + 8192)); return s; };
 function doFind() {
@@ -287,8 +288,8 @@ function openFilterLib() {
   const pre = (S.set.presets || []);
   openModal('Filtre kütüphanesi', `
     <p class="muted small">Wireshark kullanıcılarının en çok aradığı filtreler. Tıklayınca uygulanır; IP adreslerini ve alan adlarını kendi verinize göre değiştirebilirsiniz. Doğal dille de arayabilirsiniz (örn. “yavaş dns”).</p>
-    <div class="toolbar"><input type="text" id="fl-save-n" placeholder="Ad" style="width:160px"><input type="text" id="fl-save-f" class="wide" value="${esc(cur)}" placeholder="Kaydedilecek filtre" spellcheck="false"><button class="btn sm primary" data-act="fl-save">★ Filtreyi kaydet</button></div>
-    ${pre.length ? `<h3>★ Kayıtlı filtrelerim</h3>${pre.map((p, i) => `<div class="libitem"><div><b>${esc(p.n)}</b><div class="mono small">${esc(p.f)}</div></div><div><button class="btn sm" data-act="fl-apply" data-v="${esc(p.f)}">Uygula</button> <button class="btn sm ghost" data-act="fs-delpreset" data-v="${i}" data-reopen="1">Sil</button></div></div>`).join('')}` : ''}
+    <div class="toolbar"><input type="text" id="fl-save-n" placeholder="Ad" style="width:160px"><input type="text" id="fl-save-f" class="wide" value="${esc(cur)}" placeholder="Kaydedilecek filtre" spellcheck="false"><button class="btn sm primary" data-act="fl-save">Filtreyi kaydet</button></div>
+    ${pre.length ? `<h3>Kayıtlı filtrelerim</h3>${pre.map((p, i) => `<div class="libitem"><div><b>${esc(p.n)}</b><div class="mono small">${esc(p.f)}</div></div><div><button class="btn sm" data-act="fl-apply" data-v="${esc(p.f)}">Uygula</button> <button class="btn sm ghost" data-act="fs-delpreset" data-v="${i}" data-reopen="1">Sil</button></div></div>`).join('')}` : ''}
     ${PL.FILTER_LIB.map(g => `<h3>${esc(g.cat)}</h3>${g.items.map(([f, d]) => `<div class="libitem"><div><div>${esc(d)}</div><div class="mono small">${esc(f)}</div></div><div><button class="btn sm" data-act="fl-apply" data-v="${esc(f)}">Uygula</button></div></div>`).join('')}`).join('')}`, 'wide');
 }
 
@@ -474,7 +475,7 @@ document.addEventListener('click', e => {
     e.preventDefault();
     try { sessionStorage.setItem('pl-pt-targets', el.dataset.v || ''); } catch (x) { /* yok say */ }
     S.mode = 'adv'; try { localStorage.setItem('pl-mode', 'adv'); } catch (x) { /* yok say */ }
-    S.tab = 'ptentes'; $('#empty').hidden = true; $('#app').hidden = false; X.render(); return;
+    S.tab = 'ptentes'; if (X.syncScreen) X.syncScreen(); X.render(); return;
   }
   if (act === 'dev-problems') {
     e.preventDefault();
@@ -526,6 +527,8 @@ document.addEventListener('click', e => {
   }
 });
 
+window.__PL_renderSettings = renderSettings;
 Object.assign(X.views, { settings: renderSettings, sites: renderSites, devices: renderDevices });
+if (window.PLApp && window.PLApp.views) window.PLApp.views.settings = renderSettings;
 Object.assign(X.extra, { findBar, noteBox, filesHTML, openExport, openFilterLib, reportHTML, csvData, exportCSV });
 })();

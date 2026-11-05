@@ -34,7 +34,9 @@ def local_commit():
 
 LOCAL_COMMIT = local_commit()
 STATIC = {'/': ('index.html', 'text/html; charset=utf-8'), '/style.css': ('style.css', 'text/css; charset=utf-8'),
-          '/app.js': ('app.js', 'application/javascript; charset=utf-8'), '/parser.js': ('parser.js', 'application/javascript; charset=utf-8'),
+          '/app.js': ('app.js', 'application/javascript; charset=utf-8'),
+          '/pl-boot.js': ('pl-boot.js', 'application/javascript; charset=utf-8'),
+          '/parser.js': ('parser.js', 'application/javascript; charset=utf-8'),
           '/tlspassive.js': ('tlspassive.js', 'application/javascript; charset=utf-8'),
           '/sample.js': ('sample.js', 'application/javascript; charset=utf-8'),
           '/filter.js': ('filter.js', 'application/javascript; charset=utf-8'),
