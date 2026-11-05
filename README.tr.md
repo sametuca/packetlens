@@ -23,6 +23,8 @@ python3 packetlens.py --no-capture  # root olmadan, sadece .pcap analizi (macOS'
 Tarayıcı açılmazsa terminalde yazan **`http://127.0.0.1:8765/?t=...`** adresini **tam olarak** açın (`?t=` oturum anahtarı şart). Ana sayfada anahtar yoksa sunucu sizi otomatik yönlendirir.
 
 **macOS:** komut yazmak yerine proje klasöründeki **`start.command`** dosyasına çift tıklayın — sunucuyu başlatır ve tarayıcıyı doğru adreste otomatik açar. `index.html` dosyasına doğrudan çift tıklamayın: o zaman sayfa sunucusuz (`file://`) açılır ve canlı analiz çalışmaz.
+
+**Linux (Kali vb.):** komut yazmak yerine dosya yöneticinizde **`start.sh`** dosyasına çift tıklayıp "Çalıştır" / "Terminalde çalıştır" seçin — canlı yakalama için sudo parolanızı sorar, tarayıcıyı otomatik açar; root yoksa dosya analizi moduna düşer. Uygulamalar menüsüne (ve masaüstüne) gerçek bir **PacketLens** simgesi eklemek için bir kez `./install-desktop-launcher.sh` çalıştırın.
 Seçenekler: `-i eth0` (varsayılan arayüz), `--port 9000`, `--no-browser`, `--scan-interval DK` (periyodik ARP taraması, root).
 Sunucu olmadan `index.html` dosyasını doğrudan açıp `.pcap` / `.pcapng` yükleyebilirsiniz (canlı analiz ve ptentes çalışmaz).
 macOS/Windows’ta canlı paket yakalama yoktur; `python3 packetlens.py --no-capture` ile dosya analizi yapılır.
