@@ -30,13 +30,12 @@
         </div>
         <hr>
         <button class="menu-item" data-act="open">📂 Dosya aç</button>
-        <button class="menu-item" data-act="sample">🧪 Örnek yükle</button>
         <button class="menu-item" data-act="settings">⚙ Ayarlar</button>
       </div>
     </div>
     <button class="btn" data-act="ptentes" id="b-pt" title="Araya girme motoru">ptentes</button>
     <button class="btn" data-act="settings" id="b-set" title="Ayarlar">⚙ Ayarlar</button>
-    <button class="btn primary big" data-act="analyze" id="b-live">▶ Analiz et</button>
+    <button class="btn primary big" data-act="analyze" id="b-live">▶ Canlı analiz</button>
     <input type="file" id="file" accept=".pcap,.pcapng,.cap" hidden>
   </div>
 </header>
@@ -50,9 +49,7 @@
       <h1>Bir yakalama dosyasını buraya bırakın</h1>
       <p>.pcap / .pcapng dosyası açın; PacketLens trafiği uygulamalara, bağlantılara ve sorunlara ayırıp düz dille anlatsın.</p>
       <div class="row">
-        <button class="btn primary big" data-act="analyze">▶ Canlı analiz et</button>
-        <button class="btn" data-act="open">Dosya seç</button>
-        <button class="btn" data-act="sample">Örnek yakalamayı dene</button>
+        <button class="btn" data-act="open">📂 Dosya seç</button>
       </div>
       <p class="muted small" id="live-hint"></p>
     </div>
@@ -85,7 +82,6 @@
 <script src="filter.js"></script>
 <script src="extras.js"></script>
 <script src="tools.js"></script>
-<script src="sample.js" onerror="void 0"></script>
 <script src="app.js"></script>
 <script src="views.js"></script>
 <script src="features.js"></script>

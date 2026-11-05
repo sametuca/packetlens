@@ -34,6 +34,8 @@ button, input, select { font: inherit; color: inherit; }
 .update-bar { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; padding: 8px 20px; background: var(--accent-bg); color: var(--text); border-bottom: 1px solid var(--line); font-size: 13px; }
 .update-bar .btn.sm { padding: 4px 10px; font-size: 12px; }
 .livebar select { padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); }
+.livebar .live-lab { font-size: 12px; color: var(--muted); margin-right: 4px; }
+.livebar select.ifsel { min-width: 220px; max-width: min(420px, 100%); flex: 1 1 200px; font-size: 13px; }
 .rec { display: inline-flex; align-items: center; gap: 6px; color: var(--high); font-weight: 600; }
 .rec::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--high); animation: pulse 1.2s infinite; }
 @keyframes pulse { 50% { opacity: .25; } }

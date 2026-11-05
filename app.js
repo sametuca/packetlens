@@ -156,13 +156,6 @@ function loadBuffer(buf, name) {
   catch (e) { toast(e.message || 'Dosya okunamadı'); }
 }
 function loadFile(f) { const r = new FileReader(); r.onload = () => loadBuffer(r.result, f.name); r.readAsArrayBuffer(f); }
-function loadSample() {
-  if (!window.SAMPLE_PCAP_B64) return toast('Örnek dosya bulunamadı (sample.js)');
-  const bin = atob(window.SAMPLE_PCAP_B64), u = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
-  loadBuffer(u.buffer, 'örnek');
-}
-
 /* ---------- üst çubuk / mod / sekmeler ---------- */
 function renderChrome() {
   $('#m-simple').classList.toggle('on', S.mode === 'simple'); $('#m-adv').classList.toggle('on', S.mode === 'adv');
@@ -174,6 +167,11 @@ function renderChrome() {
     if (S.tab === 'ptentes') {
       $('#tabs').innerHTML = `<button class="tab on" data-act="tab" data-v="ptentes" role="tab">ptentes</button>`;
       $('#qmeta').innerHTML = '<span class="muted small">Araya girme motoru — yakalama dosyası olmadan da çalışır.</span>';
+      return;
+    }
+    if (S.tab === 'settings') {
+      $('#tabs').innerHTML = `<button class="tab on" data-act="tab" data-v="settings" role="tab">${T('⚙ Ayarlar')}</button>`;
+      $('#qmeta').innerHTML = `<span class="muted small">${T('Paket yüklemeden dil, tema ve canlı yakalama tercihlerini düzenleyebilirsiniz.')}</span>`;
       return;
     }
     $('#tabs').innerHTML = ''; $('#qmeta').innerHTML = ''; return;
@@ -198,10 +196,22 @@ function renderChrome() {
 function render() {
   renderChrome();
   if (!S.A && S.tab !== 'settings' && S.tab !== 'ptentes') return;
-  const v = $('#view'), sc = v.scrollTop;
-  const R = Object.assign({ summary: renderSummary, problems: renderProblems, flows: renderFlows, packets: renderPackets }, (window.PLApp && window.PLApp.views) || {});
-  (R[S.tab] || renderSummary)(v);
+  const v = $('#view');
+  if (!v) return;
+  const sc = v.scrollTop;
+  const extra = (window.PLApp && window.PLApp.views) || {};
+  const R = Object.assign({ summary: renderSummary, problems: renderProblems, flows: renderFlows, packets: renderPackets }, extra);
+  let fn = R[S.tab];
+  if (!fn && !S.A) {
+    v.innerHTML = `<div class="empty-note">${esc(T('Görünüm yüklenemedi. Sayfayı Ctrl+Shift+R (Mac: Cmd+Shift+R) ile yenileyin.'))}</div>`;
+    return;
+  }
+  if (!fn) fn = renderSummary;
+  try { fn(v); } catch (e) {
+    v.innerHTML = `<div class="card"><p class="muted">${esc(e.message || String(e))}</p></div>`;
+  }
   if (S.tab !== 'packets') v.scrollTop = sc;
+  if ((S.tab === 'settings' || S.tab === 'ptentes') && window.PLI) window.PLI.apply(v);
 }
 
 /* ---------- Özet ---------- */
@@ -452,12 +462,12 @@ async function initServer() {
       const hint = $('#live-hint');
       if (hint) {
         if (!j.capture) hint.textContent = sysPlatformHint(j);
-        else hint.textContent = j.root ? 'Canlı analiz hazır: “▶ Analiz et” düğmesine basın.' : 'Canlı analiz için programı sudo ile başlatın (şu an root değil).';
+        else hint.textContent = j.root ? 'Adaptör seçip üstteki çubuktan ▶ Başlat.' : 'Canlı yakalama için sudo ile başlatın (start.command / sudo python3 packetlens.py).';
       }
       if (window.PLApp && window.PLApp.checkUpdate) window.PLApp.checkUpdate(j.commit);
     } catch (e2) { /* yan etkiler sunucu bağlantısını bozmaz */ }
     renderLivebar();
-    syncFileOnlyChrome();
+    syncHeaderLiveBtn();
   } catch (e) {
     if (seq !== initServerSeq) return;
     srvInit = 'fail';
@@ -494,35 +504,53 @@ function liveStartHint(s) {
   if (s.platform === 'win32') return '<span class="muted small">Windows: <span class="mono">start.bat</span> dosyasını Yönetici olarak çalıştırın.</span>';
   return `<span class="muted small">Root değilsiniz: canlı analiz için <span class="mono">sudo python3 packetlens.py</span></span>`;
 }
-function syncFileOnlyChrome() {
-  const mac = isMacFileOnly(), b = $('#b-live');
-  const heroBtn = document.querySelector('#empty .row button[data-act="analyze"], #empty .row button[data-act="open"]');
-  if (mac) {
-    if (b && !S.live.running) {
-      b.textContent = '📂 Dosya aç';
-      b.className = 'btn primary big';
-      b.dataset.act = 'open';
-      b.title = 'macOS: kayıtlı .pcap / .pcapng analizi';
-    }
-    if (heroBtn) {
-      heroBtn.textContent = '📂 Dosya aç';
-      heroBtn.dataset.act = 'open';
-    }
-  } else if (b && !S.live.running) {
-    b.textContent = '▶ Analiz et';
+function buildIfaceSelect(ifaces, ifc) {
+  const kindTx = { ethernet: 'Ethernet', wifi: 'Wi-Fi', loopback: 'Loopback', virtual: 'Sanal', any: '' };
+  let opts = `<option value="any"${ifc === 'any' ? ' selected' : ''}>🌐 ${T('Tüm arayüzler')} (any)</option>`;
+  for (const i of ifaces) {
+    const bits = [i.label || i.name, T(kindTx[i.kind] || 'Ethernet'), i.state === 'up' ? T('bağlı') : T('kapalı')];
+    if (i.ipv4) bits.push(i.ipv4);
+    if (i.default) bits.push('★ ' + T('internet çıkışı'));
+    opts += `<option value="${esc(i.name)}"${ifc === i.name ? ' selected' : ''}>${esc(bits.join(' · '))}</option>`;
+  }
+  return `<label class="live-lab">${T('Ağ adaptörü')}</label><select id="iface" class="ifsel">${opts}</select>`;
+}
+function goHomeScreen(afterStop) {
+  S.liveOpen = false;
+  closeDrawer();
+  $('#empty').hidden = false;
+  $('#app').hidden = true;
+  const hint = $('#live-hint');
+  if (hint && afterStop && S.pk.length && S.A) {
+    hint.innerHTML = `${S.pk.length.toLocaleString(L())} paket yakalandı. <button type="button" class="btn sm primary" data-act="view-capture">${T('Yakalamayı incele')}</button>`;
+  } else if (hint && S.srv) hint.textContent = sysPlatformHint(S.srv);
+  renderLivebar();
+}
+function syncHeaderLiveBtn() {
+  const b = $('#b-live');
+  if (!b || S.live.running) return;
+  if (isMacFileOnly()) {
+    b.textContent = '📂 Dosya aç';
+    b.className = 'btn primary big';
+    b.dataset.act = 'open';
+    b.title = 'macOS: .pcap / .pcapng dosyası';
+    return;
+  }
+  b.removeAttribute('title');
+  if (S.liveOpen) {
+    b.textContent = '✕ Kapat';
+    b.className = 'btn big';
+    b.dataset.act = 'analyze';
+  } else {
+    b.textContent = '▶ Canlı analiz';
     b.className = 'btn primary big';
     b.dataset.act = 'analyze';
-    b.removeAttribute('title');
-    if (heroBtn) {
-      heroBtn.textContent = '▶ Canlı analiz et';
-      heroBtn.dataset.act = 'analyze';
-    }
   }
 }
 function renderLivebar() {
   const bar = $('#livebar'), s = S.srv, b = $('#b-live');
   if (S.live.running) { b.textContent = '■ Durdur'; b.className = 'btn danger big'; b.dataset.act = 'livestop'; }
-  else syncFileOnlyChrome();
+  else syncHeaderLiveBtn();
   if (!S.live.running && !S.liveOpen) { bar.hidden = true; return; }
   bar.hidden = false;
   const cmd = '<span class="mono">sudo python3 packetlens.py</span>';
@@ -540,27 +568,19 @@ function renderLivebar() {
     else msg = `Sunucu bilinmiyor. Kali terminalinde: ${cmd}`;
     bar.innerHTML = `<b>Canlı analiz</b><span class="muted">${msg}</span><button class="btn sm" data-act="retry-srv">Yeniden dene</button><button class="btn sm ghost" data-act="analyze">Kapat ✕</button>`;
   } else if (!s.capture && s.platform === 'darwin') {
-    bar.innerHTML = `<b>Dosya analizi</b><span class="muted">Canlı yakalama için <span class="mono">start.command</span> (sudo). Şimdilik Wireshark/tcpdump ile kaydettiğiniz .pcap dosyasını açın.</span>
-      <button class="btn sm primary" data-act="open">Dosya seç</button>
-      <button class="btn sm" data-act="sample">Örnek</button>
-      <button class="btn sm ghost" data-act="analyze">Kapat ✕</button>`;
+    bar.innerHTML = `<b>Dosya analizi</b><span class="muted">Canlı yakalama için <span class="mono">start.command</span> (sudo). .pcap dosyası için Dosya seç.</span>
+      <button class="btn sm primary" data-act="open">Dosya seç</button>`;
   } else if (!s.capture) {
     const plat = (s.platform === 'win32') ? ' Windows’ta Npcap kurulunca canlı yakalama açılır.' : '';
-    bar.innerHTML = `<b>Canlı analiz</b><span class="muted">Canlı yakalama kapalı.${plat} Dosya sürükleyip bırakabilirsiniz.</span><button class="btn sm" data-act="open">Dosya seç</button><button class="btn sm ghost" data-act="analyze">Kapat ✕</button>`;
+    bar.innerHTML = `<b>Canlı analiz</b><span class="muted">Canlı yakalama kapalı.${plat} .pcap dosyası sürükleyin.</span><button class="btn sm" data-act="open">Dosya seç</button>`;
   } else {
     const ifaces = s.interfaces || [], st = S.set, defIf = (ifaces.find(i => i.default) || {}).name, ifc = S.live.iface && S.live.iface !== 'any' ? S.live.iface : (st.iface || s.default_iface || defIf || 'any');
     const opts = [st.duration ? T(st.duration + ' sn sonra otomatik durur') : T('süre sınırı yok'), T('en fazla ' + st.max.toLocaleString(L()) + ' paket'), st.promisc ? T('promiscuous açık') : T('promiscuous kapalı')].join(' · ');
-    const kindIc = { ethernet: '🖧', wifi: '📶', loopback: '↺', virtual: '⧉' }, kindTx = { ethernet: 'Ethernet', wifi: 'Wi-Fi', loopback: 'Loopback', virtual: 'Sanal' };
-    const cards = [{ name: 'any', kind: 'any', state: 'up' }].concat(ifaces).map(i => i.kind === 'any'
-      ? `<button class="ifc ${ifc === 'any' ? 'on' : ''}" data-act="pickif" data-v="any"><span class="ifc-ic">🌐</span><b>${T('Tüm arayüzler')}</b><span class="muted small">any</span></button>`
-      : `<button class="ifc ${ifc === i.name ? 'on' : ''} ${i.state !== 'up' ? 'down' : ''}" data-act="pickif" data-v="${esc(i.name)}"><span class="ifc-ic">${kindIc[i.kind] || '🖧'}</span><b>${esc(i.label || i.name)}</b>${i.default ? `<span class="iftag">${T('internet çıkışı')}</span>` : ''}<span class="muted small">${T(kindTx[i.kind] || 'Ethernet')} · ${i.state === 'up' ? T('bağlı') : T('kapalı')}${i.speed > 0 ? ' · ' + i.speed + ' Mb/s' : ''}</span><span class="mono small">${esc(i.ipv4 ? i.ipv4 + (i.mask ? '/' + maskBits(i.mask) : '') : '—')}</span><span class="mono small muted">${esc(i.mac || '')}</span><span class="muted small">↓ ${fmtB(+i.rx || 0)} · ↑ ${fmtB(+i.tx || 0)}</span></button>`).join('');
     const gw = S.net && S.net.gateway && S.net.gateway.ip ? `<span class="muted small">${T('Ağ geçidi')}: <span class="mono">${esc(S.net.gateway.ip)}</span>${S.net.dns && S.net.dns.length ? ' · DNS: <span class="mono">' + esc(S.net.dns.slice(0, 2).join(', ')) + '</span>' : ''}</span>` : '';
-    bar.innerHTML = `<div class="ifgrid" role="listbox" aria-label="${T('Ağ adaptörü')}">${cards}</div><input type="hidden" id="iface" value="${esc(ifc)}">${gw}<b class="sr"></b><input id="capf" class="capf" value="${esc(S.live.filter != null && S.live.since ? S.live.filter : (S.live.filter || st.capfilter || ''))}" placeholder="Yakalama filtresi (isteğe bağlı): host 192.168.1.5 and port 443" spellcheck="false" autocomplete="off">
-      <button class="btn primary" data-act="livestart" ${canPressLiveStart(s) ? '' : 'disabled'}>▶ Analizi başlat</button>
-      ${S.pk.length && S.live.since ? `<a class="btn sm" href="/api/save" download>.pcap olarak kaydet</a>` : ''}
+    bar.innerHTML = `${buildIfaceSelect(ifaces, ifc)}${gw}<input id="capf" class="capf" value="${esc(S.live.filter != null && S.live.since ? S.live.filter : (S.live.filter || st.capfilter || ''))}" placeholder="Yakalama filtresi (isteğe bağlı): host 192.168.1.5 and port 443" spellcheck="false" autocomplete="off">
+      <button class="btn primary big" data-act="livestart" ${canPressLiveStart(s) ? '' : 'disabled'}>▶ Başlat</button>
       <span class="muted small">${opts} · <a href="#" data-act="settings">değiştir</a></span>
-      ${liveStartHint(s)}
-      <button class="btn sm ghost" data-act="analyze" title="Kapat">✕</button>`;
+      ${liveStartHint(s)}`;
   }
 }
 async function liveStart() {
@@ -596,11 +616,17 @@ async function livePoll() {
       const c = $('#livecount'); if (c) c.textContent = S.pk.length.toLocaleString(L());
       if (S.tab === 'packets' && $('#pkb')) { renderChrome(); updatePacketList(); } else render();
     }
-    if (!j.running && S.live.running) { stopLiveUI(); toast('Yakalama sona erdi'); }
+    if (!j.running && S.live.running) { stopLiveUI(); goHomeScreen(true); toast('Yakalama sona erdi'); }
   } catch (e) { /* ağ hatası: bir sonraki turda tekrar dener */ } finally { livePoll.busy = false; }
 }
 function stopLiveUI() { S.live.running = false; clearInterval(S.live.timer); S.live.timer = null; renderLivebar(); }
-async function liveStop() { try { await api('/api/stop', { method: 'POST' }); } catch (e) { /* yok say */ } await livePoll(); stopLiveUI(); render(); }
+async function liveStop() {
+  try { await api('/api/stop', { method: 'POST' }); } catch (e) { /* yok say */ }
+  await livePoll();
+  stopLiveUI();
+  goHomeScreen(true);
+  toast(T('Yakalama durduruldu'));
+}
 
 /* ---------- olaylar ---------- */
 function buildQuery(text) {
@@ -647,7 +673,6 @@ document.addEventListener('click', e => {
     case 'settings': S.tab = S.tab === 'settings' ? (S.A ? 'summary' : 'summary') : 'settings'; if (S.tab === 'settings') { $('#empty').hidden = true; $('#app').hidden = false; } else if (!S.A) { $('#empty').hidden = false; $('#app').hidden = true; } S.liveOpen = false; renderLivebar(); render(); break;
     case 'ptentes': S.mode = 'adv'; try { localStorage.setItem('pl-mode', 'adv'); } catch (x) { /* yok say */ } S.tab = 'ptentes'; $('#empty').hidden = true; $('#app').hidden = false; S.liveOpen = false; renderLivebar(); render(); break;
     case 'lang': S.set.lang = v; saveSettings(); applySettings(false); render(); renderLivebar(); if (window.PLI) window.PLI.apply(document.body); break;
-    case 'sample': loadSample(); break;
     case 'tab': S.tab = v; if ((S.tab === 'settings' || S.tab === 'ptentes') && !S.A) { $('#empty').hidden = true; $('#app').hidden = false; } render(); break;
     case 'clearq': setQuery(''); break;
     case 'try': setQuery(v); break;
@@ -673,7 +698,16 @@ document.addEventListener('click', e => {
     case 'closedr': closeDrawer(); break;
     case 'livestart': liveStart(); break;
     case 'livestop': liveStop(); break;
+    case 'view-capture': { $('#empty').hidden = true; $('#app').hidden = false; const h = $('#live-hint'); if (h) h.textContent = ''; render(); break; }
   }
+});
+document.addEventListener('change', e => {
+  if (e.target.id !== 'iface') return;
+  const c = $('#capf');
+  if (c) S.live.filter = c.value;
+  S.live.iface = e.target.value;
+  S.set.iface = e.target.value;
+  saveSettings();
 });
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') { closeDrawer(); const m = $('#modal'); if (m) m.hidden = true; }
@@ -692,7 +726,7 @@ document.addEventListener('drop', e => { const f = e.dataTransfer && e.dataTrans
 applySettings(false);
 renderChrome();
 renderLivebar();
-initServer().then(() => syncFileOnlyChrome());
+initServer().then(() => syncHeaderLiveBtn());
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && S.liveOpen && !S.srv && srvInit === 'fail') initServer().then(() => renderLivebar());
 });
