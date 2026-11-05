@@ -1,4 +1,4 @@
-/* PackageLens - Wireshark tarzı display filter dili
+/* PacketLens - Wireshark tarzı display filter dili
    Örnekler:  ip.addr == 192.168.1.0/24 && tcp.port == 443
               dns.qry.name contains "google" || http.host == "example.com"
               tcp.analysis.retransmission && !(ip.src == 10.0.0.1)                              */
@@ -52,8 +52,8 @@ def('http.content_length', 'num', p => p.http && p.http.clen != null ? p.http.cl
 def('tls', 'bool', p => !!p.tls); def('tls.handshake.extensions_server_name', 'str', p => p.sni || undefined, 'TLS SNI (site adı)');
 def('tls.handshake.type', 'num', p => p.tls && p.tls.ht != null ? p.tls.ht : undefined, '1=ClientHello, 2=ServerHello, 11=Certificate');
 def('tls.record.content_type', 'num', p => p.tls ? p.tls.rt : undefined); def('tls.handshake.ciphersuite', 'num', p => p.tls && p.tls.cipher != null ? p.tls.cipher : undefined);
-def('pl.problem', 'bool', p => p.anoms.length > 0, 'PackageLens: sorun işaretli paket'); def('pl.app', 'str', p => p.app, 'PackageLens: uygulama adı');
-def('pl.host', 'str', (p, A) => [A.nm(p.src), A.nm(p.dst)], 'PackageLens: cihaz/alan adı'); def('pl.flow', 'num', p => p.flow); def('pl.info', 'str', p => p.info);
+def('pl.problem', 'bool', p => p.anoms.length > 0, 'PacketLens: sorun işaretli paket'); def('pl.app', 'str', p => p.app, 'PacketLens: uygulama adı');
+def('pl.host', 'str', (p, A) => [A.nm(p.src), A.nm(p.dst)], 'PacketLens: cihaz/alan adı'); def('pl.flow', 'num', p => p.flow); def('pl.info', 'str', p => p.info);
 Object.keys(PROTO_APPS).forEach(n => { if (!F[n]) def(n, 'bool', p => PROTO_APPS[n].includes(p.app)); });
 
 /* ----- sözcükleme ----- */

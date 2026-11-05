@@ -1,4 +1,4 @@
-/* PackageLens - araçlar: pcap yazma, anonimleştirme, siteler, HTTP dosyaları, CSV/JSON dışa aktarma (tarayıcı + Node) */
+/* PacketLens - araçlar: pcap yazma, anonimleştirme, siteler, HTTP dosyaları, CSV/JSON dışa aktarma (tarayıcı + Node) */
 (function (root) {
 'use strict';
 
@@ -306,7 +306,7 @@ function install(PL) {
       ['frame contains "password"', 'Paket içeriğinde “password” geçenler'],
     ] },
     { cat: 'Sorun giderme', items: [
-      ['pl.problem', 'PackageLens’in sorun işaretlediği tüm paketler'],
+      ['pl.problem', 'PacketLens’in sorun işaretlediği tüm paketler'],
       ['tcp.analysis.retransmission', 'Yeniden iletilen paketler (kayıp / yavaşlık)'],
       ['tcp.analysis.zero_window', 'Alıcının tamponu dolu (Zero Window)'],
       ['tcp.analysis.flags', 'TCP’nin tüm sorun işaretleri'],

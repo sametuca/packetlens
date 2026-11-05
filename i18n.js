@@ -1,4 +1,4 @@
-/* PackageLens - dil desteği (i18n)
+/* PacketLens - dil desteği (i18n)
  *
  * Kaynak metinler Türkçedir. Başka bir dil seçilince ekrana basılan metinler sözlükle çevrilir
  * (lang-en.js). Çeviri iki yolla yapılır:

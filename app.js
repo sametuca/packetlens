@@ -1,4 +1,4 @@
-/* PackageLens arayüzü */
+/* PacketLens arayüzü */
 (function () {
 'use strict';
 const PL = window.PL, PLF = window.PLF;
@@ -170,9 +170,16 @@ function renderChrome() {
   $('#l-tr').classList.toggle('on', S.set.lang === 'tr'); $('#l-en').classList.toggle('on', S.set.lang === 'en');
   const A = S.A;
   $('#app').classList.toggle('nodata', !A);
-  if (!A) { $('#tabs').innerHTML = ''; $('#qmeta').innerHTML = ''; return; }
+  if (!A) {
+    if (S.tab === 'ptentes') {
+      $('#tabs').innerHTML = `<button class="tab on" data-act="tab" data-v="ptentes" role="tab">ptentes</button>`;
+      $('#qmeta').innerHTML = '<span class="muted small">Araya girme motoru — yakalama dosyası olmadan da çalışır.</span>';
+      return;
+    }
+    $('#tabs').innerHTML = ''; $('#qmeta').innerHTML = ''; return;
+  }
   const tabs = [['summary', 'Özet'], ['problems', 'Sorunlar', A.problems.length], ['flows', 'Bağlantılar', A.flows.length], ['devices', 'Cihazlar'], ['sites', 'Siteler'], ['map', 'Harita'], ['charts', 'Grafik']];
-  if (S.mode === 'adv') tabs.push(['packets', 'Paketler', A.packets.length], ['stats', 'İstatistik'], ['logs', 'Günlükler']);
+  if (S.mode === 'adv') tabs.push(['packets', 'Paketler', A.packets.length], ['stats', 'İstatistik'], ['logs', 'Günlükler'], ['ptentes', 'ptentes']);
   tabs.push(['settings', '⚙ Ayarlar']);
   if (!tabs.some(t => t[0] === S.tab)) S.tab = 'summary';
   $('#tabs').innerHTML = tabs.map(t => `<button class="tab ${S.tab === t[0] ? 'on' : ''}" data-act="tab" data-v="${t[0]}" role="tab">${t[1]}${t[2] != null ? `<span class="badge ${t[0] === 'problems' && A.stats.high ? 'bad' : ''}">${t[2]}</span>` : ''}</button>`).join('');
@@ -190,7 +197,7 @@ function renderChrome() {
 }
 function render() {
   renderChrome();
-  if (!S.A && S.tab !== 'settings') return;
+  if (!S.A && S.tab !== 'settings' && S.tab !== 'ptentes') return;
   const v = $('#view'), sc = v.scrollTop;
   const R = Object.assign({ summary: renderSummary, problems: renderProblems, flows: renderFlows, packets: renderPackets }, (window.PLApp && window.PLApp.views) || {});
   (R[S.tab] || renderSummary)(v);
@@ -387,7 +394,7 @@ function renderLivebar() {
   else { b.textContent = '▶ Analiz et'; b.className = 'btn primary big'; b.dataset.act = 'analyze'; }
   if (!S.live.running && !S.liveOpen) { bar.hidden = true; return; }
   bar.hidden = false;
-  const cmd = '<span class="mono">sudo python3 packagelens.py</span>';
+  const cmd = '<span class="mono">sudo python3 packetlens.py</span>';
   if (S.live.running) {
     bar.innerHTML = `<span class="rec">CANLI</span><span class="muted">${esc(S.live.iface)}${S.live.filter ? ' · filtre: <span class="mono">' + esc(S.live.filter) + '</span>' : ''} · <b id="livecount">${S.pk.length}</b> paket</span><button class="btn danger sm" data-act="livestop">Durdur</button><a class="btn sm" href="/api/save?t=${encodeURIComponent(TOKEN)}" download>.pcap olarak kaydet</a>`;
   } else if (!s) {
@@ -471,9 +478,10 @@ document.addEventListener('click', e => {
     case 'pickif': { const c = $('#capf'); if (c) S.live.filter = c.value; S.live.iface = v; S.set.iface = v; renderLivebar(); return; }
     case 'analyze': S.liveOpen = !S.liveOpen; if (S.liveOpen) loadNet().then(renderLivebar); renderLivebar(); if (S.liveOpen) { const c = $('#capf'); if (c) c.focus(); } break;
     case 'settings': S.tab = S.tab === 'settings' ? (S.A ? 'summary' : 'summary') : 'settings'; if (S.tab === 'settings') { $('#empty').hidden = true; $('#app').hidden = false; } else if (!S.A) { $('#empty').hidden = false; $('#app').hidden = true; } S.liveOpen = false; renderLivebar(); render(); break;
+    case 'ptentes': S.mode = 'adv'; try { localStorage.setItem('pl-mode', 'adv'); } catch (x) { /* yok say */ } S.tab = 'ptentes'; $('#empty').hidden = true; $('#app').hidden = false; S.liveOpen = false; renderLivebar(); render(); break;
     case 'lang': S.set.lang = v; saveSettings(); applySettings(false); render(); renderLivebar(); if (window.PLI) window.PLI.apply(document.body); break;
     case 'sample': loadSample(); break;
-    case 'tab': S.tab = v; render(); if (S.tab === 'settings' && !S.A) { $('#empty').hidden = true; $('#app').hidden = false; } break;
+    case 'tab': S.tab = v; if ((S.tab === 'settings' || S.tab === 'ptentes') && !S.A) { $('#empty').hidden = true; $('#app').hidden = false; } render(); break;
     case 'clearq': setQuery(''); break;
     case 'try': setQuery(v); break;
     case 'clrflow': S.flowFilter = null; computeVisible(); render(); break;

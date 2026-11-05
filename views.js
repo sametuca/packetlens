@@ -1,4 +1,4 @@
-/* PackageLens - ek görünümler: Grafik, Harita, İstatistik, Günlükler, akış takibi, sıra diyagramı */
+/* PacketLens - ek görünümler: Grafik, Harita, İstatistik, Günlükler, akış takibi, sıra diyagramı */
 (function () {
 'use strict';
 const X = window.PLApp; if (!X) return;

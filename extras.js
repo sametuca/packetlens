@@ -1,4 +1,4 @@
-/* PackageLens - akış takibi, günlükler, istatistikler ve güvenlik tespitleri */
+/* PacketLens - akış takibi, günlükler, istatistikler ve güvenlik tespitleri */
 (function (root) {
 'use strict';
 

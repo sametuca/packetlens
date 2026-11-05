@@ -1,4 +1,4 @@
-/* PackageLens - paket çözümleyici ve analiz motoru (tarayıcı + Node, bağımlılıksız) */
+/* PacketLens - paket çözümleyici ve analiz motoru (tarayıcı + Node, bağımlılıksız) */
 (function (root) {
 'use strict';
 

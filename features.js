@@ -1,4 +1,4 @@
-/* PackageLens - ek özellikler: Ayarlar, Siteler, HTTP dosyaları, dışa aktarma/rapor/anonimleştirme, filtre kütüphanesi, içerik arama, notlar */
+/* PacketLens - ek özellikler: Ayarlar, Siteler, HTTP dosyaları, dışa aktarma/rapor/anonimleştirme, filtre kütüphanesi, içerik arama, notlar */
 (function () {
 'use strict';
 const X = window.PLApp; if (!X) return;
@@ -225,25 +225,25 @@ function csvData(kind) {
   if (kind === 'tls') return ['tls', ['time_s', 'client', 'sni', 'version', 'cipher', 'alpn', 'cert_subject'], PL.tlsLog(A).map(e => [(e.t - t0).toFixed(3), e.client, e.sni || '', e.version != null ? (PL.TLSV[e.version] || '') : '', e.cipher != null ? PL.cipherName(e.cipher) : '', e.alpn.join('|'), (e.cert && e.cert.subject) || ''])];
   return null;
 }
-function exportCSV(kind) { const d = csvData(kind); if (!d) return; download(`packagelens-${d[0]}-${stamp()}.csv`, PL.toCSV(d[1], d[2]), 'text/csv;charset=utf-8'); toast(`${d[2].length} satır dışa aktarıldı`); }
+function exportCSV(kind) { const d = csvData(kind); if (!d) return; download(`packetlens-${d[0]}-${stamp()}.csv`, PL.toCSV(d[1], d[2]), 'text/csv;charset=utf-8'); toast(`${d[2].length} satır dışa aktarıldı`); }
 function exportJSON() {
   const A = S.A, t0 = A.t0, st = A.stats;
-  const o = { tool: 'PackageLens', generated: new Date().toISOString(), source: S.live.name || 'canlı yakalama',
+  const o = { tool: 'PacketLens', generated: new Date().toISOString(), source: S.live.name || 'canlı yakalama',
     summary: { packets: st.packets, bytes: st.bytes, duration_s: +st.duration.toFixed(3), flows: st.flows, hosts: st.hosts, problems: st.problems },
     problems: A.problems.map(pr => ({ id: pr.id, severity: pr.sev, category: catName(pr.type), type: pr.type, title: T(pr.title), description: T(pr.plain), advice: T(pr.advice), time_s: +(pr.ts - t0).toFixed(3), packets: pr.pkts.length, flow: pr.flow || null })),
     flows: visFlowsList().map(f => ({ id: f.id, app: f.app, client: f.client, server: f.server, proto: f.proto, client_port: f.aPort, server_port: f.bPort, packets: f.pkts, bytes: f.bytes, start_s: +(f.start - t0).toFixed(3), duration_s: +(f.end - f.start).toFixed(3), status: f.status, note: S.notes[f.id] || undefined })),
     sites: PL.sites(A, {}).map(r => ({ domain: r.domain, device: r.client, flows: r.flows, bytes: r.bytes, dns_queries: r.dnsQ, cleartext: r.clear })),
     notes: S.notes };
-  download(`packagelens-analysis-${stamp()}.json`, JSON.stringify(o, null, 2), 'application/json');
+  download(`packetlens-analysis-${stamp()}.json`, JSON.stringify(o, null, 2), 'application/json');
 }
 function recordsOfVisible() { return S.vis.map(p => S.raw[p.no - 1]).filter(Boolean); }
 function exportPcap(anon) {
   const recs = recordsOfVisible(); if (!recs.length) return toast('Dışa aktarılacak paket yok');
-  if (!anon) { download(`packagelens-${stamp()}.pcap`, PL.pcapBytes(recs), 'application/vnd.tcpdump.pcap'); return toast(`${recs.length} paket kaydedildi`); }
+  if (!anon) { download(`packetlens-${stamp()}.pcap`, PL.pcapBytes(recs), 'application/vnd.tcpdump.pcap'); return toast(`${recs.length} paket kaydedildi`); }
   const opt = { addr: !!($('#an-addr') || {}).checked, payload: !!($('#an-pay') || {}).checked };
   if (!opt.addr && !opt.payload) return toast('En az bir anonimleştirme seçeneği işaretleyin');
   const r = PL.anonymize(recs, opt);
-  download(`packagelens-anonymized-${stamp()}.pcap`, PL.pcapBytes(r.records), 'application/vnd.tcpdump.pcap');
+  download(`packetlens-anonymized-${stamp()}.pcap`, PL.pcapBytes(r.records), 'application/vnd.tcpdump.pcap');
   toast(`${recs.length} paket anonimleştirildi (${r.stats.macs} MAC, ${r.stats.ips + r.stats.ip6} IP maskelendi)`);
 }
 function reportHTML() {
@@ -253,13 +253,13 @@ function reportHTML() {
   const probs = l => l.length ? l.map(pr => `<div class="pr ${e(pr.sev)}"><b>[${e({ high: 'Ciddi', med: 'Orta', low: 'Düşük' }[pr.sev])}] ${e(pr.title)}</b><p>${e(pr.plain)}</p><p class="ad">${e(pr.advice)}</p><small>${(pr.ts - t0).toFixed(2)}. saniye · ${pr.pkts.length} paket${pr.flow ? ' · bağlantı #' + pr.flow : ''}${S.notes[pr.flow] ? ' · Not: ' + e(S.notes[pr.flow]) : ''}</small></div>`).join('') : '<p class="ok">✓ Sorun bulunamadı.</p>';
   const sites = PL.sites(A, {}).slice(0, 15);
   const notes = Object.keys(S.notes);
-  return `<!doctype html><html lang="tr"><head><meta charset="utf-8"><title>PackageLens raporu</title><style>
+  return `<!doctype html><html lang="tr"><head><meta charset="utf-8"><title>PacketLens raporu</title><style>
 body{font:14px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif;color:#1b2230;max-width:900px;margin:30px auto;padding:0 18px}h1{margin:0 0 4px}h2{margin:28px 0 8px;border-bottom:2px solid #e1e4ea;padding-bottom:4px}
 .m{color:#667085}table{border-collapse:collapse;width:100%}th,td{border-bottom:1px solid #e1e4ea;padding:5px 8px;text-align:left;font-size:13px}td.n,th.n{text-align:right}
 .k{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}.k div{border:1px solid #e1e4ea;border-radius:8px;padding:8px 12px}.k b{display:block;font-size:20px}
 .pr{border-left:4px solid #98a2b3;background:#f6f7f9;padding:6px 12px;margin:8px 0;border-radius:4px}.pr.high{border-color:#d92d20}.pr.med{border-color:#b54708}.pr p{margin:4px 0}.pr .ad{color:#475467}.ok{color:#067647}
 code{font-family:ui-monospace,Menlo,monospace}footer{margin-top:30px;color:#667085;font-size:12px}@media print{body{margin:0}}</style></head><body>
-<h1>PackageLens raporu</h1><div class="m">${e(new Date().toLocaleString(X.L()))} · kaynak: ${e(S.live.name || 'canlı yakalama')}</div>
+<h1>PacketLens raporu</h1><div class="m">${e(new Date().toLocaleString(X.L()))} · kaynak: ${e(S.live.name || 'canlı yakalama')}</div>
 <h2>Özet</h2><div class="k"><div><b>${st.packets.toLocaleString(X.L())}</b>paket</div><div><b>${fmtB(st.bytes)}</b>toplam veri</div><div><b>${fmtD(st.duration)}</b>süre</div><div><b>${st.flows}</b>bağlantı</div><div><b>${st.hosts}</b>cihaz / adres</div><div><b>${st.problems}</b>sorun / uyarı</div></div>
 <h2>Güvenlik bulguları (${sec.length})</h2>${probs(sec)}<h2>Performans ve ağ sorunları (${oth.length})</h2>${probs(oth)}
 <h2>Uygulama başına trafik</h2><table><tr><th>Uygulama</th><th class="n">Bağlantı</th><th class="n">Paket</th><th class="n">Veri</th></tr>${A.apps.slice(0, 10).map(a => `<tr><td>${e(a.app)}</td><td class="n">${a.flows}</td><td class="n">${a.pkts}</td><td class="n">${fmtB(a.bytes)}</td></tr>`).join('')}</table>
@@ -267,11 +267,11 @@ code{font-family:ui-monospace,Menlo,monospace}footer{margin-top:30px;color:#6670
 ${sites.length ? `<h2>Erişilen siteler</h2><table><tr><th>Site</th><th>Cihaz</th><th class="n">Bağlantı</th><th class="n">Veri</th></tr>${sites.map(r => `<tr><td><code>${e(r.domain)}</code>${r.clear ? ' (şifresiz)' : ''}</td><td>${e(nm(r.client))}</td><td class="n">${r.flows}</td><td class="n">${fmtB(r.bytes)}</td></tr>`).join('')}</table>` : ''}
 ${(A.creds || []).length ? `<h2>Şifresiz kimlik bilgileri (parolalar maskeli)</h2><table><tr><th>Protokol</th><th>Kullanıcı</th><th>Parola</th></tr>${A.creds.map(c => `<tr><td>${e(c.proto)}</td><td>${e(c.user)}</td><td><code>${e(c.pass)}</code></td></tr>`).join('')}</table>` : ''}
 ${notes.length ? `<h2>Notlar</h2>${notes.map(id => `<p><b>Bağlantı #${e(id)}</b> (${e(nm(A.flows[id - 1].client))} → ${e(nm(A.flows[id - 1].server))}): ${e(S.notes[id])}</p>`).join('')}` : ''}
-<footer>PackageLens ile oluşturuldu. Otomatik analiz bir ipucudur; sonuçları kendiniz doğrulayın.</footer></body></html>`;
+<footer>PacketLens ile oluşturuldu. Otomatik analiz bir ipucudur; sonuçları kendiniz doğrulayın.</footer></body></html>`;
 }
 function exportReport() {
   const html = window.PLI ? window.PLI.translateHTML(reportHTML()) : reportHTML();
-  download(`packagelens-report-${stamp()}.html`, html, 'text/html;charset=utf-8');
+  download(`packetlens-report-${stamp()}.html`, html, 'text/html;charset=utf-8');
 }
 function openExport() {
   if (!S.A || !S.pk.length) return toast('Önce bir yakalama açın');
@@ -319,7 +319,7 @@ document.addEventListener('click', e => {
       S.set.presets = (S.set.presets || []).concat([{ n: n.slice(0, 40), f: f.slice(0, 300) }]); X.saveSettings(); X.render(); X.renderChrome(); if (window.PLI) window.PLI.apply(document.body); break;
     }
     case 'fs-delpreset': S.set.presets.splice(+v, 1); X.saveSettings(); X.renderChrome(); if (el.dataset.reopen) openFilterLib(); else { X.render(); if (window.PLI) window.PLI.apply(document.body); } break;
-    case 'fs-export': download('packagelens-settings.json', JSON.stringify(S.set, null, 2), 'application/json'); break;
+    case 'fs-export': download('packetlens-settings.json', JSON.stringify(S.set, null, 2), 'application/json'); break;
     case 'fs-import': $('#sfile').click(); break;
     case 'fs-reset': { const lang = S.set.lang; Object.keys(S.set).forEach(k => delete S.set[k]); Object.assign(S.set, X.DEFAULTS, { lang, presets: [] }); S.follow = true; X.saveSettings(); X.applySettings(true); X.render(); X.renderLivebar(); if (window.PLI) window.PLI.apply(document.body); toast('Ayarlar sıfırlandı'); break; }
   }

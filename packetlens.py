@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""PackageLens - Kali/Linux için canlı paket yakalama + yerel GUI sunucusu.
+"""PacketLens - Kali/Linux için canlı paket yakalama + yerel GUI sunucusu.
 
 Kullanım:
-    sudo python3 packagelens.py                 # arayüzü açar, canlı yakalama için root gerekir
-    python3 packagelens.py --no-capture         # root olmadan sadece .pcap dosyası analizi
-    sudo python3 packagelens.py -i eth0 --port 8765
+    sudo python3 packetlens.py                 # arayüzü açar, canlı yakalama için root gerekir
+    python3 packetlens.py --no-capture         # root olmadan sadece .pcap dosyası analizi
+    sudo python3 packetlens.py -i eth0 --port 8765
 
 Bağımlılık yok: yalnızca Python 3 standart kütüphanesi (AF_PACKET). Wireshark/libpcap gerekmez.
 Sunucu sadece 127.0.0.1 üzerinde dinler ve rastgele bir erişim anahtarı (token) ister.
@@ -14,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 from capfilter import compile_filter, FilterError
+from ptentes import PT as PTENTES
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATIC = {'/': ('index.html', 'text/html; charset=utf-8'), '/style.css': ('style.css', 'text/css; charset=utf-8'),
@@ -25,6 +26,7 @@ STATIC = {'/': ('index.html', 'text/html; charset=utf-8'), '/style.css': ('style
           '/tools.js': ('tools.js', 'application/javascript; charset=utf-8'),
           '/features.js': ('features.js', 'application/javascript; charset=utf-8'),
           '/i18n.js': ('i18n.js', 'application/javascript; charset=utf-8'),
+          '/ptentes-ui.js': ('ptentes-ui.js', 'application/javascript; charset=utf-8'),
           '/lang-en.js': ('lang-en.js', 'application/javascript; charset=utf-8')}
 SNAP = 1600           # paket başına saklanan en fazla bayt (başlıklar + TLS hello için yeterli)
 MAX_PACKETS = 300000  # bellek koruması
@@ -63,7 +65,7 @@ class Capture:
                         pass
             s.settimeout(0.3)
         except PermissionError:
-            self.error = 'Yakalama için root yetkisi gerekir. Şu şekilde başlatın: sudo python3 packagelens.py'
+            self.error = 'Yakalama için root yetkisi gerekir. Şu şekilde başlatın: sudo python3 packetlens.py'
             return False
         except OSError as e:
             self.error = 'Arayüz açılamadı: %s' % e
@@ -91,7 +93,7 @@ class Capture:
                 # lo arayüzünde her paket hem "giden" (PACKET_OUTGOING=4) hem "gelen" olarak görünür: kopyayı at
                 if addr[0] == 'lo' and addr[2] == 4:
                     continue
-                # PackageLens'in kendi arayüz trafiğini (127.0.0.1:<port>) yakalama: geri besleme döngüsü olmasın
+                # PacketLens'in kendi arayüz trafiğini (127.0.0.1:<port>) yakalama: geri besleme döngüsü olmasın
                 if SELF_PORT and len(data) >= 38 and data[12:14] == b'\x08\x00' and data[23] == 6 and data[26:34] == b'\x7f\x00\x00\x01\x7f\x00\x00\x01':
                     ihl = (data[14] & 15) * 4
                     if len(data) >= 14 + ihl + 4 and SELF_PORT in struct.unpack('!HH', data[14 + ihl:18 + ihl]):
@@ -207,7 +209,7 @@ def net_info():
 
 
 class H(BaseHTTPRequestHandler):
-    server_version = 'PackageLens'
+    server_version = 'PacketLens'
 
     def log_message(self, *a):
         pass
@@ -232,6 +234,15 @@ class H(BaseHTTPRequestHandler):
         # DNS rebinding koruması: yalnızca localhost / 127.0.0.1 Host başlıklarını kabul et
         host = (self.headers.get('Host') or '').rsplit(':', 1)[0]
         return host in ('127.0.0.1', 'localhost')
+
+    def _json(self):
+        try:
+            n = max(0, min(1 << 20, int(self.headers.get('Content-Length') or 0)))
+            raw = self.rfile.read(n) if n else b''
+            j = json.loads(raw.decode('utf-8')) if raw else {}
+            return j if isinstance(j, dict) else {}
+        except Exception:
+            return {}
 
     def _handle(self, method):
         if not self._host_ok():
@@ -279,9 +290,42 @@ class H(BaseHTTPRequestHandler):
             except ValueError:
                 since = 0
             return self._send(200, CAP.poll(since))
+        if u.path.startswith('/api/ptentes/'):
+            return self._ptentes(u.path, method)
         if u.path == '/api/save':
             fn = time.strftime('capture-%Y%m%d-%H%M%S.pcap')
             return self._send(200, CAP.pcap_bytes(), 'application/vnd.tcpdump.pcap', {'Content-Disposition': 'attachment; filename="%s"' % fn})
+        return self._send(404, {'error': 'yok'})
+
+    def _ptentes(self, path, method):
+        name = path[len('/api/ptentes/'):]
+        if name == 'status':
+            return self._send(200, PTENTES.status())
+        if name == 'report':
+            fn = time.strftime('ptentes-%Y%m%d-%H%M%S.json')
+            return self._send(200, json.dumps(PTENTES.report(), indent=2),
+                              'application/json; charset=utf-8',
+                              {'Content-Disposition': 'attachment; filename="%s"' % fn})
+        if name == 'discover' and method == 'POST':
+            body = self._json()
+            try:
+                r = PTENTES.discover(body.get('iface') or '')
+            except Exception as e:
+                r = {'ok': False, 'error': str(e)}
+            return self._send(200 if r.get('ok') else 400, r)
+        if name == 'start' and method == 'POST':
+            body = self._json()
+            try:
+                r = PTENTES.start(body)
+            except Exception as e:
+                r = {'ok': False, 'error': 'Başlatılamadı: %s' % e}
+            return self._send(200 if r.get('ok') else 400, r)
+        if name == 'stop' and method == 'POST':
+            return self._send(200, PTENTES.stop())
+        if name == 'dnsmap' and method == 'POST':
+            body = self._json()
+            m = PTENTES.set_dns_map(body.get('map') or {})
+            return self._send(200, {'ok': True, 'map': m})
         return self._send(404, {'error': 'yok'})
 
     def do_GET(self): self._handle('GET')
@@ -305,7 +349,7 @@ def open_browser(url):
 
 def main():
     global ARGS, SELF_PORT
-    ap = argparse.ArgumentParser(description='PackageLens - kolay kullanımlı paket analizcisi')
+    ap = argparse.ArgumentParser(description='PacketLens - kolay kullanımlı paket analizcisi')
     ap.add_argument('-i', '--iface', default='any', help='varsayılan arayüz (any = hepsi)')
     ap.add_argument('--port', type=int, default=8765)
     ap.add_argument('--no-capture', action='store_true', help='canlı yakalamayı kapat (root gerekmez)')
@@ -315,11 +359,11 @@ def main():
         print('Uyarı: canlı yakalama yalnızca Linux’ta çalışır; --no-capture ile devam ediliyor.')
         ARGS.no_capture = True
     if not ARGS.no_capture and os.geteuid() != 0:
-        print('Not: root değilsiniz, canlı yakalama başlatılamaz (dosya analizi çalışır). Canlı yakalama için: sudo python3 packagelens.py')
+        print('Not: root değilsiniz, canlı yakalama başlatılamaz (dosya analizi çalışır). Canlı yakalama için: sudo python3 packetlens.py')
     srv = ThreadingHTTPServer(('127.0.0.1', ARGS.port), H)
     SELF_PORT = srv.server_address[1]
     url = 'http://127.0.0.1:%d/?t=%s' % (SELF_PORT, TOKEN)
-    print('PackageLens çalışıyor → %s' % url)
+    print('PacketLens çalışıyor → %s' % url)
     print('Durdurmak için Ctrl+C')
     if not ARGS.no_browser:
         threading.Timer(0.5, open_browser, (url,)).start()
@@ -329,6 +373,7 @@ def main():
         pass
     finally:
         CAP.stop()
+        PTENTES.stop()
         srv.server_close()
 
 

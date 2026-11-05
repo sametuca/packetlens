@@ -1,8 +1,8 @@
-# PackageLens
+# PacketLens
 
 **English** · [Türkçe](README.tr.md)
 
-A Wireshark-style packet analyzer that is much easier to use. PackageLens groups traffic into applications, connections, devices and **problems**, and explains them in plain language.
+A Wireshark-style packet analyzer that is much easier to use. PacketLens groups traffic into applications, connections, devices and **problems**, and explains them in plain language.
 Built for Kali Linux with **zero dependencies** (Python 3 only). No Wireshark, tshark or libpcap needed.
 
 ![Overview](docs/en/02-overview.png)
@@ -10,10 +10,10 @@ Built for Kali Linux with **zero dependencies** (Python 3 only). No Wireshark, t
 ## Quick start
 
 ```bash
-git clone https://github.com/sametuca/packagelens.git
-cd packagelens
-sudo python3 packagelens.py          # live capture + GUI (opens in your browser)
-python3 packagelens.py --no-capture  # no root: analyze .pcap files only (works on macOS too)
+git clone https://github.com/sametuca/packetlens.git
+cd packetlens
+sudo python3 packetlens.py          # live capture + GUI (opens in your browser)
+python3 packetlens.py --no-capture  # no root: analyze .pcap files only (works on macOS too)
 ```
 
 If the browser does not open, use the `http://127.0.0.1:8765/?t=...` address printed in the terminal.
@@ -69,6 +69,13 @@ The **Devices** tab lists every machine on the local network: IP, MAC, vendor (f
 - OS guess from TTL and TCP options (heuristic only).
 - Problems are split into **Security / Performance / Network**.
 
+**ptentes (MITM)**
+- ARP sahteciliği ile hedef cihazı ağ geçidiyle makinenizin arasına alır; trafik akmaya devam ederken izlenir.
+- Şifresiz HTTP istekleri (Host, yol, User-Agent, Basic auth, form alanları), TLS SNI ve DNS sorguları canlı akışta görünür.
+- DNS eşlemesi ile seçili alan adlarına sahte yanıt verilebilir (`ornek.com=192.168.1.50`).
+- Yerel alt ağda ARP taraması; yakalanan kimlik bilgileri, cihazlar ve olaylar için JSON rapor.
+- Durdurulduğunda ARP tablosu ve `ip_forward` otomatik geri alınır. Ayrıntı: [docs/ptentes.md](docs/ptentes.md).
+
 ## Screenshots
 
 | | |
@@ -88,7 +95,9 @@ Live capture needs root. **Use it only on networks you are authorized to monitor
 
 | File | Purpose |
 |---|---|
-| `packagelens.py` | Local server + live capture (AF_PACKET), adapter and network info |
+| `packetlens.py` | Local server + live capture (AF_PACKET), adapter and network info |
+| `ptentes.py` | MITM engine: ARP spoofing, HTTP/TLS/DNS inspection, DNS redirection, ARP discovery |
+| `ptentes-ui.js` | ptentes control panel (session, live feed, credentials, DNS, hosts) |
 | `capfilter.py` | BPF capture filter (host/net/port/proto, and/or/not) |
 | `parser.js` | pcap/pcapng reader, protocol dissection, flow and problem analysis |
 | `filter.js` | Wireshark-style display filter language |

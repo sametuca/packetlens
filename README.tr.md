@@ -1,4 +1,4 @@
-# PackageLens
+# PacketLens
 
 [English](README.md) · **Türkçe**
 
@@ -10,10 +10,10 @@ Kali Linux için hazırlandı; **bağımlılık yok** (sadece Python 3). Wiresha
 ## Hızlı başlangıç
 
 ```bash
-git clone https://github.com/sametuca/packagelens.git
-cd packagelens
-sudo python3 packagelens.py          # canlı yakalama + arayüz (tarayıcı otomatik açılır)
-python3 packagelens.py --no-capture  # root olmadan, sadece .pcap analizi (macOS'ta da çalışır)
+git clone https://github.com/sametuca/packetlens.git
+cd packetlens
+sudo python3 packetlens.py          # canlı yakalama + arayüz (tarayıcı otomatik açılır)
+python3 packetlens.py --no-capture  # root olmadan, sadece .pcap analizi (macOS'ta da çalışır)
 ```
 
 Tarayıcı açılmazsa terminalde yazan `http://127.0.0.1:8765/?t=...` adresini açın.
@@ -69,6 +69,13 @@ Başlıktaki her zaman görünür büyük **▶ Analiz et** düğmesine basın. 
 - TTL ve TCP seçeneklerinden işletim sistemi tahmini (sezgisel).
 - Sorunlar **Güvenlik / Performans / Ağ** olarak ayrılır.
 
+**ptentes (MITM)**
+- ARP sahteciliği ile hedef cihaz ağ geçidiyle makinenizin arasına alınır; trafik akmaya devam ederken izlenir.
+- Şifresiz HTTP istekleri (Host, yol, User-Agent, Basic auth, form alanları), TLS SNI ve DNS sorguları canlı akışta görünür.
+- DNS eşlemesiyle seçili alan adlarına sahte yanıt verilebilir (`ornek.com=192.168.1.50`).
+- Yerel alt ağda ARP taraması; kimlik bilgileri, cihazlar ve olaylar için JSON rapor.
+- Durdurulduğunda ARP tablosu ve `ip_forward` otomatik geri alınır. Ayrıntı: [docs/ptentes.md](docs/ptentes.md).
+
 ## Ekran görüntüleri
 
 | | |
@@ -88,7 +95,9 @@ Canlı yakalama root gerektirir. **Yalnızca izleme yetkiniz olan ağlarda kulla
 
 | Dosya | Görev |
 |---|---|
-| `packagelens.py` | Yerel sunucu + canlı yakalama (AF_PACKET), adaptör ve ağ bilgisi |
+| `packetlens.py` | Yerel sunucu + canlı yakalama (AF_PACKET), adaptör ve ağ bilgisi |
+| `ptentes.py` | MITM motoru: ARP sahteciliği, HTTP/TLS/DNS gözlemi, DNS yönlendirme, ARP keşfi |
+| `ptentes-ui.js` | ptentes kontrol paneli (oturum, canlı akış, kimlik bilgileri, DNS, cihazlar) |
 | `capfilter.py` | BPF yakalama filtresi (host/net/port/proto, and/or/not) |
 | `parser.js` | pcap/pcapng okuyucu, protokol çözümleme, akış ve sorun analizi |
 | `filter.js` | Wireshark tarzı görüntüleme filtresi dili |

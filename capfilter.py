@@ -1,4 +1,4 @@
-"""PackageLens - yakalama filtresi (tcpdump/BPF sözdiziminin yaygın alt kümesi).
+"""PacketLens - yakalama filtresi (tcpdump/BPF sözdiziminin yaygın alt kümesi).
 
 Desteklenen: host, net, port, portrange, src/dst, tcp/udp/icmp/icmp6/arp/ip/ip6,
              less/greater N, and/or/not (&&, ||, !) ve parantez.
