@@ -230,6 +230,12 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def _redirect(self, loc):
+        self.send_response(302)
+        self.send_header('Location', loc)
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+
     def _send(self, code, body, ctype='application/json; charset=utf-8', extra=None):
         if isinstance(body, (dict, list)):
             body = json.dumps(body).encode()
@@ -265,6 +271,8 @@ class H(BaseHTTPRequestHandler):
             return self._send(403, {'error': 'host'})
         u = urlparse(self.path)
         q = parse_qs(u.query)
+        if u.path == '/' and method == 'GET' and not q.get('t'):
+            return self._redirect('/?t=%s' % TOKEN)
         if u.path in STATIC and method == 'GET':
             name, ctype = STATIC[u.path]
             p = os.path.join(HERE, name)
@@ -277,7 +285,8 @@ class H(BaseHTTPRequestHandler):
         if not secrets.compare_digest(q.get('t', [''])[0], TOKEN):
             return self._send(401, {'error': 'token'})
         if u.path == '/api/info':
-            return self._send(200, {'interfaces': interfaces(), 'root': os.geteuid() == 0, 'capture': not ARGS.no_capture, 'default_iface': ARGS.iface, 'commit': LOCAL_COMMIT, 'repo': 'sametuca/packetlens'})
+            return self._send(200, {'interfaces': interfaces(), 'root': os.geteuid() == 0, 'capture': not ARGS.no_capture,
+                                    'default_iface': ARGS.iface, 'commit': LOCAL_COMMIT, 'repo': 'sametuca/packetlens', 'platform': sys.platform})
         if u.path == '/api/net':
             ni = net_info()
             DEVICE_REG.merge_arp(ni.get('arp'))

@@ -5,7 +5,13 @@ const PL = window.PL, PLF = window.PLF;
 const $ = (s, r) => (r || document).querySelector(s);
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const S = { A: null, raw: [], pk: [], mode: 'simple', tab: 'summary', timeRange: null, visPre: [], logTab: 'dns', probCat: 'all', query: null, qtext: '', flowFilter: null, pktSet: null, pktSetLabel: '', vis: [], visFlows: new Set(), selPkt: null, flowSort: 'start', follow: true, srv: null, live: { running: false, since: 0, timer: null, iface: 'any', dirty: false }, appColors: new Map() };
-const TOKEN = new URLSearchParams(location.search).get('t');
+function authToken() {
+  const q = new URLSearchParams(location.search).get('t');
+  if (q) return q;
+  try { return sessionStorage.getItem('pl-token') || ''; } catch (e) { return ''; }
+}
+const TOKEN = authToken();
+let srvInit = 'pending';
 const DEFAULTS = { lang: 'tr', theme: 'auto', density: 'normal', timefmt: 'rel', names: true,
   dnsSlow: 250, rttSlow: 150, retransMed: 3, scanTargets: 15, tunnelSubs: 15, dgaNames: 20, sweepHosts: 15, off: [],
   iface: '', capfilter: '', snap: 1600, max: 300000, duration: 0, promisc: true, follow: true, presets: [] };
@@ -378,18 +384,33 @@ function openProbPk(id) {
 }
 
 /* ---------- Canlı yakalama ---------- */
-const api = (path, opt) => fetch(path + (path.includes('?') ? '&' : '?') + 't=' + encodeURIComponent(TOKEN), opt).then(r => r.json().then(j => ({ ok: r.ok, j })));
+const api = (path, opt) => fetch(path + (path.includes('?') ? '&' : '?') + 't=' + encodeURIComponent(authToken()), opt).then(r => r.json().then(j => ({ ok: r.ok, j })));
 function b64u8(s) { const b = atob(s), u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; }
 function maskBits(m) { return String(m).split('.').reduce((n, o) => n + (+o).toString(2).replace(/0/g, '').length, 0); }
 async function loadNet() { try { const { ok, j } = await api('/api/net'); if (ok) S.net = j; } catch (e) { /* yok say */ } }
 async function initServer() {
-  if (!TOKEN || location.protocol === 'file:') return;
+  if (location.protocol === 'file:') { srvInit = 'file'; return; }
+  const tok = authToken();
+  if (!tok) { srvInit = 'notoken'; return; }
+  srvInit = 'loading';
   try {
-    const { ok, j } = await api('/api/info'); if (!ok) return;
-    S.srv = j; await loadNet(); if (PL.loadOui) PL.loadOui(); renderLivebar();
-    $('#live-hint').textContent = j.capture ? (j.root ? 'Canlı analiz hazır: “▶ Analiz et” düğmesine basın.' : 'Canlı analiz için programı sudo ile başlatın (şu an root değil).') : 'Canlı yakalama kapalı (--no-capture).';
-  if (window.PLApp && window.PLApp.checkUpdate) window.PLApp.checkUpdate(j.commit);
-  } catch (e) { /* sunucu yok: sadece dosya modu */ }
+    const { ok, j } = await api('/api/info');
+    if (!ok) { srvInit = 'fail'; S.srv = null; renderLivebar(); return; }
+    S.srv = j;
+    try { sessionStorage.setItem('pl-token', tok); } catch (e) { /* yok say */ }
+    srvInit = 'ok';
+    await loadNet(); if (PL.loadOui) PL.loadOui(); renderLivebar();
+    const hint = $('#live-hint');
+    if (hint) {
+      if (!j.capture) hint.textContent = sysPlatformHint(j);
+      else hint.textContent = j.root ? 'Canlı analiz hazır: “▶ Analiz et” düğmesine basın.' : 'Canlı analiz için programı sudo ile başlatın (şu an root değil).';
+    }
+    if (window.PLApp && window.PLApp.checkUpdate) window.PLApp.checkUpdate(j.commit);
+  } catch (e) { srvInit = 'fail'; S.srv = null; renderLivebar(); }
+}
+function sysPlatformHint(j) {
+  if (j && j.platform && !j.platform.startsWith('linux')) return 'macOS/Windows: canlı paket yakalama yok; pcap yükleyin veya Linux’ta sudo ile çalıştırın.';
+  return 'Canlı yakalama kapalı (--no-capture).';
 }
 function renderLivebar() {
   const bar = $('#livebar'), s = S.srv, b = $('#b-live');
@@ -401,9 +422,16 @@ function renderLivebar() {
   if (S.live.running) {
     bar.innerHTML = `<span class="rec">CANLI</span><span class="muted">${esc(S.live.iface)}${S.live.filter ? ' · filtre: <span class="mono">' + esc(S.live.filter) + '</span>' : ''} · <b id="livecount">${S.pk.length}</b> paket</span><button class="btn danger sm" data-act="livestop">Durdur</button><a class="btn sm" href="/api/save?t=${encodeURIComponent(TOKEN)}" download>.pcap olarak kaydet</a>`;
   } else if (!s) {
-    bar.innerHTML = `<b>Canlı analiz</b><span class="muted">Bu sayfa sunucu olmadan açılmış. Canlı analiz için programı terminalde şu komutla başlatın: ${cmd}</span><button class="btn sm ghost" data-act="analyze">Kapat ✕</button>`;
+    let msg;
+    if (srvInit === 'file') msg = 'Sayfa dosyadan (file://) açılmış. Terminalde sunucuyu başlatın ve yazdırılan <span class="mono">http://127.0.0.1:…/?t=…</span> adresini açın.';
+    else if (srvInit === 'notoken') msg = 'Oturum anahtarı (?t=…) yok. Terminaldeki tam adresi kullanın (ör. <span class="mono">http://127.0.0.1:8765/?t=…</span>) veya sunucuyu yeniden başlatıp açılan sekmeyi kullanın.';
+    else if (srvInit === 'loading') msg = 'Sunucuya bağlanılıyor…';
+    else if (srvInit === 'fail') msg = 'Sunucu yanıt vermedi (yanlış port, eski sekme veya token). Terminaldeki güncel linki açın: <span class="mono">http://127.0.0.1:8765/?t=…</span>';
+    else msg = `Sunucu bilinmiyor. Program çalışıyorsa terminaldeki tam URL’yi açın; değilse: ${cmd}`;
+    bar.innerHTML = `<b>Canlı analiz</b><span class="muted">${msg}</span><button class="btn sm ghost" data-act="analyze">Kapat ✕</button>`;
   } else if (!s.capture) {
-    bar.innerHTML = `<b>Canlı analiz</b><span class="muted">Canlı yakalama kapalı (--no-capture ile başlatılmış). Açmak için şu komutla yeniden başlatın: ${cmd}</span><button class="btn sm ghost" data-act="analyze">Kapat ✕</button>`;
+    const plat = (s.platform && !s.platform.startsWith('linux')) ? ' Bu ortamda (macOS/Windows) yalnızca .pcap dosyası analizi desteklenir; canlı yakalama için Linux gerekir.' : '';
+    bar.innerHTML = `<b>Canlı analiz</b><span class="muted">Canlı yakalama kapalı (--no-capture).${plat} Dosya sürükleyip bırakabilirsiniz.</span><button class="btn sm ghost" data-act="analyze">Kapat ✕</button>`;
   } else {
     const st = S.set, defIf = (s.interfaces.find(i => i.default) || {}).name, ifc = S.live.iface && S.live.iface !== 'any' ? S.live.iface : (st.iface || s.default_iface || defIf || 'any');
     const opts = [st.duration ? T(st.duration + ' sn sonra otomatik durur') : T('süre sınırı yok'), T('en fazla ' + st.max.toLocaleString(L()) + ' paket'), st.promisc ? T('promiscuous açık') : T('promiscuous kapalı')].join(' · ');
@@ -479,7 +507,7 @@ document.addEventListener('click', e => {
     case 'menu': { const p = $('#menu-pop'); p.hidden = !p.hidden; $('#b-menu').setAttribute('aria-expanded', String(!p.hidden)); return; }
     case 'open': $('#file').click(); break;
     case 'pickif': { const c = $('#capf'); if (c) S.live.filter = c.value; S.live.iface = v; S.set.iface = v; renderLivebar(); return; }
-    case 'analyze': S.liveOpen = !S.liveOpen; if (S.liveOpen) loadNet().then(renderLivebar); renderLivebar(); if (S.liveOpen) { const c = $('#capf'); if (c) c.focus(); } break;
+    case 'analyze': S.liveOpen = !S.liveOpen; if (S.liveOpen && !S.srv && srvInit !== 'loading') initServer().then(() => renderLivebar()); else if (S.liveOpen) loadNet().then(renderLivebar); renderLivebar(); if (S.liveOpen) { const c = $('#capf'); if (c) c.focus(); } break;
     case 'settings': S.tab = S.tab === 'settings' ? (S.A ? 'summary' : 'summary') : 'settings'; if (S.tab === 'settings') { $('#empty').hidden = true; $('#app').hidden = false; } else if (!S.A) { $('#empty').hidden = false; $('#app').hidden = true; } S.liveOpen = false; renderLivebar(); render(); break;
     case 'ptentes': S.mode = 'adv'; try { localStorage.setItem('pl-mode', 'adv'); } catch (x) { /* yok say */ } S.tab = 'ptentes'; $('#empty').hidden = true; $('#app').hidden = false; S.liveOpen = false; renderLivebar(); render(); break;
     case 'lang': S.set.lang = v; saveSettings(); applySettings(false); render(); renderLivebar(); if (window.PLI) window.PLI.apply(document.body); break;
