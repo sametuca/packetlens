@@ -33,6 +33,38 @@ def local_commit():
 
 
 LOCAL_COMMIT = local_commit()
+
+
+def git_pull_update():
+    """origin'den ff-only pull; yerel değişiklik veya canlı oturum yoksa."""
+    git_dir = os.path.join(HERE, '.git')
+    if not os.path.isdir(git_dir):
+        return {'ok': False, 'error': 'Bu kopya git deposu değil (zip indirme?). GitHub\'dan klonlayın veya elle güncelleyin.'}
+    try:
+        st = subprocess.run(['git', 'status', '--porcelain'], cwd=HERE, capture_output=True, text=True, timeout=15)
+        if st.returncode != 0:
+            return {'ok': False, 'error': (st.stderr or st.stdout or 'git status başarısız').strip()}
+        if (st.stdout or '').strip():
+            return {'ok': False, 'error': 'Kaydedilmemiş yerel değişiklikler var. Commit, stash veya değişiklikleri geri alın.'}
+        br = subprocess.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD'], cwd=HERE, capture_output=True, text=True, timeout=10)
+        branch = (br.stdout or '').strip() or 'main'
+        steps = []
+        for cmd in (['git', 'fetch', 'origin'], ['git', 'pull', '--ff-only', 'origin', branch]):
+            r = subprocess.run(cmd, cwd=HERE, capture_output=True, text=True, timeout=180)
+            steps.append({'cmd': ' '.join(cmd), 'ok': r.returncode == 0})
+            if r.returncode != 0:
+                err = (r.stderr or r.stdout or 'git hatası').strip()
+                return {'ok': False, 'error': err, 'steps': steps}
+        new = local_commit()
+        global LOCAL_COMMIT
+        LOCAL_COMMIT = new
+        return {'ok': True, 'commit': new, 'branch': branch, 'steps': steps}
+    except subprocess.TimeoutExpired:
+        return {'ok': False, 'error': 'Git zaman aşımına uğradı.'}
+    except FileNotFoundError:
+        return {'ok': False, 'error': 'git komutu bulunamadı.'}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
 STATIC = {'/': ('index.html', 'text/html; charset=utf-8'), '/style.css': ('style.css', 'text/css; charset=utf-8'),
           '/app.js': ('app.js', 'application/javascript; charset=utf-8'),
           '/pl-boot.js': ('pl-boot.js', 'application/javascript; charset=utf-8'),
@@ -334,6 +366,13 @@ class H(BaseHTTPRequestHandler):
             except ValueError:
                 since = 0
             return self._send(200, CAP.poll(since))
+        if u.path == '/api/update/pull' and method == 'POST':
+            if CAP.running:
+                return self._send(400, {'ok': False, 'error': 'Canlı yakalama açıkken güncelleme yapılamaz.'})
+            if PTENTES.status().get('running'):
+                return self._send(400, {'ok': False, 'error': 'ptentes oturumu açıkken güncelleme yapılamaz.'})
+            r = git_pull_update()
+            return self._send(200 if r.get('ok') else 400, r)
         if u.path.startswith('/api/ptentes/'):
             return self._ptentes(u.path, method)
         if u.path == '/api/save':

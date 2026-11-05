@@ -28,6 +28,8 @@ def('tcp.seq', 'num', p => tcp(p) ? p.seq : undefined); def('tcp.ack', 'num', p 
 def('tcp.window_size', 'num', p => tcp(p) ? p.win : undefined); def('tcp.len', 'num', p => tcp(p) ? p.payloadLen : undefined, 'TCP veri uzunluğu');
 def('tcp.stream', 'num', p => tcp(p) ? p.flow : undefined, 'Bağlantı (akış) numarası');
 def('tcp.analysis.retransmission', 'bool', p => tcp(p) ? p.anoms.includes('retrans') : undefined, 'Yeniden iletim');
+def('tcp.analysis.duplicate_ack', 'bool', p => tcp(p) ? p.anoms.includes('retrans') : undefined, 'Yinelenen ACK (Wireshark uyumlu; yeniden iletimle birlikte işaretlenir)');
+def('tcp.analysis.out_of_order', 'bool', p => tcp(p) ? p.anoms.includes('retrans') : undefined, 'Sıra dışı segment (Wireshark uyumlu; yeniden iletimle birlikte işaretlenir)');
 def('tcp.analysis.zero_window', 'bool', p => tcp(p) ? p.anoms.includes('zerowin') : undefined, 'Sıfır pencere');
 def('tcp.analysis.flags', 'bool', p => tcp(p) ? (p.anoms.includes('retrans') || p.anoms.includes('zerowin')) : undefined, 'Herhangi bir TCP analiz uyarısı');
 def('udp', 'bool', udp); def('udp.srcport', 'num', p => udp(p) ? p.sport : undefined); def('udp.dstport', 'num', p => udp(p) ? p.dport : undefined);

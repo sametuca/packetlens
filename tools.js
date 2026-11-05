@@ -534,6 +534,16 @@ function install(PL) {
       ['tcp.flags.syn == 1 && tcp.flags.ack == 0 && tcp.port == 445', 'SMB (445) bağlantı denemeleri'],
       ['http && http.request', 'Şifresiz HTTP istekleri'],
     ] },
+    { cat: 'Wireshark klasikleri', items: [
+      ['tcp.stream == 1', 'Tek TCP akışı (bağlantı numarasını değiştirin)'],
+      ['tcp.analysis.duplicate_ack || tcp.analysis.out_of_order', 'TCP sıra / ACK sorunları'],
+      ['icmp.type == 8', 'Ping istekleri (ICMP Echo Request)'],
+      ['icmp.type == 0', 'Ping yanıtları (ICMP Echo Reply)'],
+      ['!(arp || dns || mdns || ssdp || llmnr)', 'Arka plan gürültüsünü gizle (Wireshark “noise filter”)'],
+      ['tcp.port != 80 && tcp.port != 443 && tcp', 'Standart web dışı TCP portları'],
+      ['frame.number >= 1 && frame.number <= 100', 'Paket numarası aralığı (Wireshark Go to / filtre)'],
+      ['eth.addr == aa:bb:cc:dd:ee:ff', 'Belirli MAC adresi (örnek — kendi MAC’inizle değiştirin)'],
+    ] },
   ];
 }
 

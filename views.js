@@ -47,7 +47,7 @@ function renderCharts(v) {
     <label class="muted">Aralık <select id="chb"><option value="auto">Otomatik (${fmtT(bs)})</option>${[0.1, 1, 5, 10, 60].map(x => `<option value="${x}" ${String(CH.bucket) === String(x) ? 'selected' : ''}>${fmtT(x)}</option>`).join('')}</select></label>
     <label class="muted"><input type="checkbox" id="chs" ${CH.stack ? 'checked' : ''}> Uygulamaya göre renklendir</label>
     ${S.timeRange ? '<button class="btn sm" data-act="cleartime">Aralık seçimini temizle</button><button class="btn sm primary" data-act="vgoflows">Seçili aralıktaki bağlantıları gör</button>' : ''}</div>
-  <div class="card" style="position:relative"><div class="muted small" style="margin-bottom:6px">Grafik üzerinde <b>sürükleyerek</b> bir zaman aralığı seçin: tüm sekmeler o aralığa göre filtrelenir. ${pk.length.toLocaleString('tr')} paket gösteriliyor.</div>
+  <div class="card" style="position:relative"><div class="muted small" style="margin-bottom:6px">Wireshark <b>I/O Graph</b> benzeri: zamana göre trafik ve sorun yoğunluğu. <b>Sürükleyerek</b> aralık seçin — tüm sekmeler o aralığa göre filtrelenir. ${pk.length.toLocaleString('tr')} paket gösteriliyor.</div>
     <svg id="chsvg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="display:block;touch-action:none;cursor:crosshair" role="img" aria-label="Zamana göre ${esc(M.label)}"><g style="font-size:10px;fill:var(--muted)">${g}</g>${sel}<rect id="chsel" x="0" y="${tp}" width="0" height="${ph}" fill="var(--accent)" opacity=".2"/><line id="chcur" y1="${tp}" y2="${tp + ph}" stroke="var(--text)" opacity=".4" visibility="hidden"/></svg>
     <div id="chtip" class="tip" hidden></div>
     ${CH.stack ? `<div class="legend">${keys.map(k => `<span><i class="dot" style="background:${appColor(k)}"></i>${esc(k)}</span>`).join('')}</div>` : ''}</div>`;
@@ -134,16 +134,39 @@ function renderMap(v) {
 }
 
 /* =============== İSTATİSTİK =============== */
+const EXPERT_FILTERS = {
+  retrans: 'tcp.analysis.retransmission', zerowin: 'tcp.analysis.zero_window', rst: 'tcp.flags.reset == 1', nosyn: 'tcp.flags.syn == 1 && tcp.flags.ack == 0',
+  dnsslow: 'dns.time > 0.25', dnserr: 'dns.flags.rcode > 0 && dns.flags.rcode != 3', dnsno: 'dns.flags.response == 0 && dns', dnsnx: 'dns.flags.rcode == 3',
+  icmp: 'icmp.type == 3', scan: 'pl.problem', refused: 'tcp.flags.reset == 1', slowrtt: 'pl.problem',
+};
+const EXPERT_LABELS = {
+  retrans: 'Yeniden iletim', zerowin: 'Sıfır pencere', rst: 'RST / bağlantı kesildi', nosyn: 'SYN yanıtsız', dnsslow: 'Yavaş DNS',
+  dnserr: 'DNS hata', dnsno: 'DNS yanıtsız', dnsnx: 'NXDOMAIN', icmp: 'ICMP ulaşılamadı', scan: 'Port taraması', refused: 'Bağlantı reddedildi', slowrtt: 'Yavaş el sıkışma',
+};
+function expertRows(A) {
+  const m = new Map();
+  for (const pr of A.problems) {
+    const e = m.get(pr.type) || { type: pr.type, n: 0, hi: 0, title: pr.title };
+    e.n++; if (pr.sev === 'high') e.hi++;
+    m.set(pr.type, e);
+  }
+  return [...m.values()].sort((a, b) => b.n - a.n).slice(0, 10);
+}
 function renderStats(v) {
   const A = S.A, st = PL.stats(A), hosts = [...A.hosts.values()].filter(h => /^\d|:/.test(h.ip) && !/^([0-9a-f]{2}:){5}/i.test(h.ip)).sort((a, b) => (b.bytesTx + b.bytesRx) - (a.bytesTx + a.bytesRx)).slice(0, 12);
   const maxL = Math.max(1, ...st.lenHist.map(b => b.pkts)), tcp = st.tcp, dns = st.dns, http = st.http;
-  v.innerHTML = `<div class="grid g2">
+  const expert = expertRows(A);
+  const expertCard = expert.length ? `<div class="card" style="margin-bottom:14px"><h3>${T('Uzman özeti')} <small>${T('Wireshark Expert Information benzeri')}</small></h3>${table([T('Konu'), '#Olay', '#Kritik', T('Filtre')], expert.map(e => {
+    const f = EXPERT_FILTERS[e.type] || 'pl.problem';
+    return `<tr><td>${esc(T(EXPERT_LABELS[e.type] || e.type))}</td><td class="num">${e.n}</td><td class="num">${e.hi || ''}</td><td><button class="btn sm" data-act="expert" data-v="${esc(f)}">${T('Uygula')}</button></td></tr>`;
+  }))}<p class="muted small" style="margin-top:8px">${T('Tüm sorunlu paketler:')} <button class="btn sm" data-act="expert" data-v="pl.problem">pl.problem</button></p></div>` : '';
+  v.innerHTML = `${expertCard}<div class="grid g2">
   <div class="card"><h3>Protokol hiyerarşisi <small>paketlerin hangi katmanlardan oluştuğu</small></h3>${table(['Protokol', '#Paket', '#Veri', '#Oran'], st.hier.map(r => `<tr><td style="padding-left:${10 + r.d * 18}px">${esc(r.name)}</td><td class="num">${r.pkts}</td><td class="num">${fmtB(r.bytes)}</td><td class="num">${pct(r.bytes, st.total.bytes)}</td></tr>`))}</div>
   <div class="card"><h3>Paket boyutu dağılımı</h3><div class="bars">${st.lenHist.map(b => `<div class="bar"><span class="nm">${b.lo}–${b.hi === Infinity ? '…' : b.hi} B</span><span class="track"><span class="fill" style="display:block;width:${b.pkts / maxL * 100}%;background:var(--c0)"></span></span><span class="val">${b.pkts}</span></div>`).join('')}</div>
     <h3 style="margin-top:18px">TCP sağlığı</h3><div class="muted">El sıkışma süresi: ${tcp.n ? `en az <b>${tcp.min.toFixed(0)} ms</b>, ortanca <b>${tcp.med.toFixed(0)} ms</b>, %95 <b>${tcp.p95.toFixed(0)} ms</b>, en çok <b>${tcp.max.toFixed(0)} ms</b> (${tcp.n} bağlantı)` : 'veri yok'}<br>Yeniden iletim: <b>${tcp.retrans}</b> · Sıfırlanan (RST) bağlantı: <b>${tcp.resets}</b></div></div>
   </div>
-  <div class="card" style="margin-top:14px"><h3>En çok veri taşıyan konuşmalar <small>iki cihaz arasındaki toplam trafik</small></h3>${table(['Cihaz A', 'Cihaz B', '#Bağlantı', '#Paket', '#Veri', 'Sorun'], st.convs.slice(0, 12).map(c => `<tr data-act="try" data-v="${esc(c.a)}"><td>${esc(nm(c.a))}</td><td>${esc(nm(c.b))}</td><td class="num">${c.flows}</td><td class="num">${c.pkts}</td><td class="num">${fmtB(c.bytes)}</td><td>${c.probs ? `<span class="pill med">${c.probs}</span>` : ''}</td></tr>`))}</div>
-  <div class="card" style="margin-top:14px"><h3>Cihazlar <small>işletim sistemi tahmini TTL ve TCP ayarlarına dayanır, kesin değildir</small></h3>${table(['Cihaz', 'Adres', 'Tahmini sistem', '#Gönderilen', '#Alınan', '#Bağlantı'], hosts.map(h => `<tr data-act="try" data-v="${esc(h.ip)}"><td>${esc(nm(h.ip))}</td><td class="mono">${esc(h.ip)}</td><td>${esc(h.os || '–')}</td><td class="num">${fmtB(h.bytesTx)}</td><td class="num">${fmtB(h.bytesRx)}</td><td class="num">${h.flows.size}</td></tr>`))}</div>
+  <div class="card" style="margin-top:14px"><h3>En çok veri taşıyan konuşmalar <small>Wireshark Conversations — tıklayınca iki uç filtresi</small></h3>${table(['Cihaz A', 'Cihaz B', '#Bağlantı', '#Paket', '#Veri', 'Sorun'], st.convs.slice(0, 12).map(c => `<tr data-act="conv" data-v="${esc(c.a + '|' + c.b)}" style="cursor:pointer"><td>${esc(nm(c.a))}</td><td>${esc(nm(c.b))}</td><td class="num">${c.flows}</td><td class="num">${c.pkts}</td><td class="num">${fmtB(c.bytes)}</td><td>${c.probs ? `<span class="pill med">${c.probs}</span>` : ''}</td></tr>`))}</div>
+  <div class="card" style="margin-top:14px"><h3>Uç noktalar (IPv4) <small>Wireshark Endpoints — cihaz başına gönderilen/alınan</small></h3>${table(['Cihaz', 'Adres', 'Tahmini sistem', '#Gönderilen', '#Alınan', '#Bağlantı'], hosts.map(h => `<tr data-act="try" data-v="${esc(h.ip)}" style="cursor:pointer"><td>${esc(nm(h.ip))}</td><td class="mono">${esc(h.ip)}</td><td>${esc(h.os || '–')}</td><td class="num">${fmtB(h.bytesTx)}</td><td class="num">${fmtB(h.bytesRx)}</td><td class="num">${h.flows.size}</td></tr>`))}</div>
   <div class="grid g2" style="margin-top:14px">
     <div class="card"><h3>DNS özeti</h3><div class="muted">${dns.n} sorgu, ${dns.answered} yanıtlandı${dns.avg != null ? ` · ortalama <b>${dns.avg.toFixed(0)} ms</b>, en yavaş <b>${dns.max.toFixed(0)} ms</b>` : ''} · NXDOMAIN: <b>${dns.nx}</b></div>
       ${dns.top.length ? '<h3 style="margin-top:12px">En çok sorgulananlar</h3>' + table(['Alan adı', '#Sorgu'], dns.top.map(([n, c]) => `<tr><td class="mono">${esc(short(n, 48))}</td><td class="num">${c}</td></tr>`)) : ''}</div>
@@ -201,6 +224,7 @@ function renderStream() {
     <div class="muted small">${f.app} · <span class="cl">istemci → sunucu ${fmtB(r.bytes.AB)}</span> · <span class="sv">sunucu → istemci ${fmtB(r.bytes.BA)}</span>${r.truncated ? ' · <b>çok büyük, kısaltıldı</b>' : ''}</div></div><button class="btn sm" data-act="vclose">${T('Kapat')}</button></div>
     <div class="toolbar" style="margin:0;padding:8px 14px"><label class="muted">Görünüm <select id="stm"><option value="ascii" ${ST.mode === 'ascii' ? 'selected' : ''}>ASCII</option><option value="hex" ${ST.mode === 'hex' ? 'selected' : ''}>Hex dökümü</option><option value="raw" ${ST.mode === 'raw' ? 'selected' : ''}>Ham hex</option></select></label>
     <label class="muted">Yön <select id="std"><option value="all" ${ST.dir === 'all' ? 'selected' : ''}>İki yön</option><option value="AB" ${ST.dir === 'AB' ? 'selected' : ''}>Sadece istemci →</option><option value="BA" ${ST.dir === 'BA' ? 'selected' : ''}>Sadece sunucu →</option></select></label>
+    <button class="btn sm primary" data-act="vapply" data-v="${f.id}">${T('Filtre: bu akış')}</button><button class="btn sm" data-act="vexcl" data-v="${f.id}">${T('Bu akışı hariç tut')}</button>
     <button class="btn sm" data-act="vcopy">Kopyala</button><button class="btn sm" data-act="vsave">İndir (.txt)</button></div>
     <div class="modal-body">${blocks || '<div class="empty-note">Bu akışta uygulama verisi yok.</div>'}</div></div>`;
   $('#stm').onchange = e => { ST.mode = e.target.value; renderStream(); };
@@ -253,7 +277,9 @@ document.addEventListener('click', ev => {
   else if (act === 'vcopy') { try { navigator.clipboard.writeText(streamPlain()); toast('Kopyalandı'); } catch (e) { toast('Kopyalanamadı'); } }
   else if (act === 'vsave') { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([streamPlain()], { type: 'text/plain' })); a.download = `akis-${ST.r.flow.id}.txt`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); }
   else if (act === 'vlog') { S.logTab = val; X.render(); }
-  else if (act === 'vnode') { X.setQuery(val); }
+  else if (act === 'vnode') { X.setQuery('ip.addr == ' + val); }
+  else if (act === 'vapply') { $('#modal').hidden = true; X.closeDrawer(); X.flowDisplayFilter(+val, false); }
+  else if (act === 'vexcl') { $('#modal').hidden = true; X.closeDrawer(); X.flowDisplayFilter(+val, true); }
   else if (act === 'vpkt') { if (S.mode === 'adv') X.goPacket(+val); }
   else if (act === 'vgoflows') { S.tab = 'flows'; X.render(); }
 });

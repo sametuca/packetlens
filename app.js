@@ -327,7 +327,8 @@ function renderFlows(v) {
 function renderPackets(v) {
   v.innerHTML = `<div class="pk-split"><div class="pk-list">${X().findBar ? X().findBar() : ''}<div class="pk-head"><span>No</span><span>${S.set.timefmt === 'delta' ? 'Fark' : S.set.timefmt === 'abs' ? 'Saat' : 'Zaman'}</span><span>Kaynak</span><span>Hedef</span><span>Protokol</span><span>Boyut</span><span>Bilgi</span></div>
     <div class="pk-body" id="pkb" tabindex="0"><div id="pki" style="position:relative"></div></div>
-    <div class="muted small" style="padding:6px 10px;border-top:1px solid var(--line);display:flex;gap:12px;align-items:center"><span id="pkcount"></span>${S.live.running ? '<label><input type="checkbox" id="follow" ' + (S.follow ? 'checked' : '') + '> Otomatik kaydır</label>' : ''}<span style="margin-left:auto">↑↓ ile gezin</span></div></div>
+    <div class="muted small" style="padding:6px 10px;border-top:1px solid var(--line);display:flex;gap:12px;align-items:center;flex-wrap:wrap"><span id="pkcount"></span>${S.live.running ? '<label><input type="checkbox" id="follow" ' + (S.follow ? 'checked' : '') + '> Otomatik kaydır</label>' : ''}
+    <label class="pk-goto">${T('Pakete git')} <input id="pkgoto" type="number" min="1" placeholder="#" style="width:72px" spellcheck="false"><button class="btn sm" type="button" data-act="pkgoto">${T('Git')}</button></label><span class="muted">↑↓ · ⌘G</span></div></div>
     <div class="pk-detail" id="pkd"></div></div>`;
   const body = $('#pkb');
   body.onscroll = drawRows;
@@ -382,7 +383,7 @@ function renderDetail() {
   if (!p) { d.innerHTML = '<div class="empty-note">Ayrıntı için bir paket seçin.</div>'; return; }
   const f = S.A.flows[p.flow - 1];
   d.innerHTML = `<div class="plain ${p._s === 'bad' ? 'bad' : ''}"><b>Ne oluyor?</b><br>${esc(PL.describePacket(p, S.A))}</div>
-    <div class="small muted" style="margin-bottom:10px">Paket #${p.no} · ${rel(p)} sn · <a href="#" data-act="flowpk" data-v="${f.id}">bu bağlantıdaki tüm paketler</a> · <a href="#" data-act="vfollow" data-v="${f.id}">akışı takip et</a></div>
+    <div class="small muted" style="margin-bottom:10px">Paket #${p.no} · ${rel(p)} sn · <a href="#" data-act="flowpk" data-v="${f.id}">${T('bu bağlantıdaki tüm paketler')}</a> · <a href="#" data-act="vfollow" data-v="${f.id}">${T('akışı takip et')}</a> · <a href="#" data-act="flowfilt" data-v="${f.id}">${T('tcp.stream filtresi')}</a></div>
     ${p.layers.map((l, i) => `<details class="layer" ${i > 0 ? 'open' : ''}><summary>${esc(l.name)}</summary><div class="fields">${l.fields.map(([k, val]) => `<div class="fld"><span class="k">${esc(k)}</span><span class="vv">${esc(val)}</span>${EXPLAIN[k] ? `<button class="q" data-act="expl" title="Bu ne demek?">?</button>` : '<span></span>'}${EXPLAIN[k] ? `<div class="expl" hidden>${esc(EXPLAIN[k])}</div>` : ''}</div>`).join('')}</div></details>`).join('')}
     <details class="layer"><summary>Ham veri (hex)</summary><pre class="hex">${hexdump(p.raw)}</pre></details>`;
 }
@@ -397,7 +398,7 @@ function evtList(pkts) {
 function openFlow(id) {
   const A = S.A, f = A.flows[id - 1], pk = f.pnos.map(n => A.packets[n - 1]), X = window.PLApp.extra;
   openDrawer(`<h2>${esc(nm(f.client))} ↔ ${esc(nm(f.server))}</h2><p>${esc(PL.describeFlow(f, A))}</p>
-    <div class="row" style="justify-content:flex-start;margin:10px 0"><button class="btn sm primary" data-act="vfollow" data-v="${id}">Akışı takip et</button><button class="btn sm" data-act="flowpk" data-v="${id}">${S.mode === 'adv' ? 'Paketler sekmesinde aç' : 'Gelişmiş modda paketleri aç'}</button></div>
+    <div class="row" style="justify-content:flex-start;margin:10px 0;flex-wrap:wrap;gap:6px"><button class="btn sm primary" data-act="vfollow" data-v="${id}">${T('Akışı takip et')}</button><button class="btn sm" data-act="flowfilt" data-v="${id}">${T('Bu bağlantıya filtrele')}</button><button class="btn sm" data-act="flowexcl" data-v="${id}">${T('Bu bağlantıyı gizle')}</button><button class="btn sm" data-act="flowpk" data-v="${id}">${S.mode === 'adv' ? T('Paketler sekmesinde aç') : T('Gelişmiş modda paketleri aç')}</button></div>
     ${X && X.noteBox ? X.noteBox(id) : ''}
     ${X && X.tlsHTML ? X.tlsHTML(f) : ''}
     ${f.probs.length ? '<h3>Sorunlar</h3>' + f.probs.map(probHTML).join('') : '<p><span class="pill ok">sağlıklı</span> Bu bağlantıda sorun tespit edilmedi.</p>'}
@@ -757,6 +758,17 @@ function buildQuery(text) {
   }
   return parseQuery(t);
 }
+function flowDisplayFilter(id, exclude) {
+  const f = S.A && S.A.flows[id - 1];
+  const base = f && f.proto === 'TCP' ? `tcp.stream == ${id}` : `pl.flow == ${id}`;
+  setQuery(exclude ? `!(${base})` : base);
+}
+function goToPacketNo(raw) {
+  const no = typeof raw === 'number' ? raw : parseInt(String(raw || '').trim(), 10);
+  if (!S.A || !no || no < 1 || no > S.A.packets.length) { toast(T('Geçersiz paket numarası')); return; }
+  if (S.tab !== 'packets') { S.tab = 'packets'; render(); }
+  selectPacket(no, true);
+}
 function setQuery(text) {
   S.qtext = text; S.query = buildQuery(text); $('#q').value = text;
   if (S.A) { computeVisible(); if (S.query && S.query.test && S.tab === 'summary') S.tab = S.mode === 'adv' ? 'packets' : 'flows'; render(); }
@@ -811,6 +823,11 @@ document.addEventListener('click', e => {
     case 'tab': S.tab = v; syncScreen(); render(); break;
     case 'clearq': setQuery(''); break;
     case 'try': setQuery(v); break;
+    case 'conv': { const i = v.indexOf('|'); if (i > 0) setQuery(`(ip.addr == ${v.slice(0, i)} && ip.addr == ${v.slice(i + 1)})`); break; }
+    case 'expert': setQuery(v); break;
+    case 'flowfilt': closeDrawer(); flowDisplayFilter(+v, false); break;
+    case 'flowexcl': closeDrawer(); flowDisplayFilter(+v, true); break;
+    case 'pkgoto': goToPacketNo(($('#pkgoto') || {}).value); break;
     case 'clrflow': S.flowFilter = null; computeVisible(); render(); break;
     case 'clrset': S.pktSet = null; computeVisible(); render(); break;
     case 'copywire': try { navigator.clipboard.writeText(S.query.wire); toast('Filtre kopyalandı'); } catch (x) { toast('Kopyalanamadı'); } break;
@@ -848,6 +865,13 @@ document.addEventListener('change', e => {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') { closeDrawer(); const m = $('#modal'); if (m) m.hidden = true; }
   else if (e.key === '/' && !/INPUT|SELECT|TEXTAREA/.test((e.target || {}).tagName || '')) { e.preventDefault(); $('#q').focus(); }
+  else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'g' && S.A && S.tab === 'packets') {
+    e.preventDefault(); const inp = $('#pkgoto'); if (inp) { inp.focus(); inp.select(); }
+  }
+});
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Enter' || (e.target || {}).id !== 'pkgoto') return;
+  e.preventDefault(); goToPacketNo(e.target.value);
 });
 let qt; $('#q').addEventListener('input', e => { clearTimeout(qt); qt = setTimeout(() => setQuery(e.target.value), 160); });
 let rz; window.addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { if (S.A && S.tab === 'summary') render(); }, 200); });
@@ -877,7 +901,9 @@ Object.assign(window.PLApp || (window.PLApp = {}), {
   S, get PL() { return window.PL; }, PLF, getPL, $, esc, fmtB, fmtD, fmtRate, rel, nm, toast, appColor, setQuery, render, renderChrome, computeVisible, openDrawer, closeDrawer, selectPacket, pSev, evtList,
   views: _plViews, extra: _plExtra,
   DEFAULTS, saveSettings, applySettings, reanalyze, ingest, loadBuffer, syncScreen, renderLiveHome, renderLivebar, L, tcol, drawRows, updatePacketList, probHTML, SEC, PERF, catOf, api,
-  goPacket(no) { closeDrawer(); S.tab = 'packets'; render(); selectPacket(no, true); },
+  goPacket(no) { closeDrawer(); goToPacketNo(no); },
+  flowDisplayFilter,
+  goToPacketNo,
 });
 if (window.__PL_renderSettings) window.PLApp.views.settings = window.__PL_renderSettings;
 if (window.__PL_renderPtentes) window.PLApp.views.ptentes = window.__PL_renderPtentes;
