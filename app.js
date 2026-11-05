@@ -472,13 +472,27 @@ function sysPlatformHint(j) {
     return j.root ? 'Windows: canlı yakalama hazır (Npcap; monitör modu gerekmez).' : 'Windows: canlı yakalama için start.bat dosyasına sağ tık → Yönetici olarak çalıştır.';
   }
   if (j && j.platform === 'win32') return 'Windows: .pcap sürükleyin veya Wireshark+Npcap kurun.';
-  if (j && j.platform === 'darwin') return 'macOS: .pcap / .pcapng dosyası sürükleyin veya Dosya seç.';
+  if (j && j.platform === 'darwin' && j.capture && j.capture_backend === 'tcpdump') {
+    return j.root ? 'macOS: canlı yakalama hazır (tcpdump).' : 'Canlı yakalama için start.command veya sudo python3 packetlens.py';
+  }
+  if (j && j.platform === 'darwin') return 'macOS: .pcap sürükleyin veya sudo ile canlı yakalama.';
   if (j && j.platform && !j.platform.startsWith('linux')) return 'Bu ortamda yalnızca .pcap dosyası analizi.';
   return 'Canlı yakalama kapalı (--no-capture).';
 }
 function isMacFileOnly() {
   const s = S.srv;
   return !!(s && s.platform === 'darwin' && !s.capture);
+}
+function canPressLiveStart(s) {
+  if (!s || !s.capture) return false;
+  if (s.platform === 'darwin' || s.platform === 'win32') return true;
+  return !!s.root;
+}
+function liveStartHint(s) {
+  if (!s || s.root) return '';
+  if (s.platform === 'darwin') return '<span class="muted small">macOS: sunucuyu <b>sudo</b> ile başlatın — <span class="mono">start.command</span> veya <span class="mono">sudo python3 packetlens.py --restart</span></span>';
+  if (s.platform === 'win32') return '<span class="muted small">Windows: <span class="mono">start.bat</span> dosyasını Yönetici olarak çalıştırın.</span>';
+  return `<span class="muted small">Root değilsiniz: canlı analiz için <span class="mono">sudo python3 packetlens.py</span></span>`;
 }
 function syncFileOnlyChrome() {
   const mac = isMacFileOnly(), b = $('#b-live');
@@ -526,7 +540,7 @@ function renderLivebar() {
     else msg = `Sunucu bilinmiyor. Kali terminalinde: ${cmd}`;
     bar.innerHTML = `<b>Canlı analiz</b><span class="muted">${msg}</span><button class="btn sm" data-act="retry-srv">Yeniden dene</button><button class="btn sm ghost" data-act="analyze">Kapat ✕</button>`;
   } else if (!s.capture && s.platform === 'darwin') {
-    bar.innerHTML = `<b>Dosya analizi</b><span class="muted">macOS’ta canlı dinleme yok; Wireshark veya tcpdump ile kaydettiğiniz dosyayı açın.</span>
+    bar.innerHTML = `<b>Dosya analizi</b><span class="muted">Canlı yakalama için <span class="mono">start.command</span> (sudo). Şimdilik Wireshark/tcpdump ile kaydettiğiniz .pcap dosyasını açın.</span>
       <button class="btn sm primary" data-act="open">Dosya seç</button>
       <button class="btn sm" data-act="sample">Örnek</button>
       <button class="btn sm ghost" data-act="analyze">Kapat ✕</button>`;
@@ -542,18 +556,26 @@ function renderLivebar() {
       : `<button class="ifc ${ifc === i.name ? 'on' : ''} ${i.state !== 'up' ? 'down' : ''}" data-act="pickif" data-v="${esc(i.name)}"><span class="ifc-ic">${kindIc[i.kind] || '🖧'}</span><b>${esc(i.label || i.name)}</b>${i.default ? `<span class="iftag">${T('internet çıkışı')}</span>` : ''}<span class="muted small">${T(kindTx[i.kind] || 'Ethernet')} · ${i.state === 'up' ? T('bağlı') : T('kapalı')}${i.speed > 0 ? ' · ' + i.speed + ' Mb/s' : ''}</span><span class="mono small">${esc(i.ipv4 ? i.ipv4 + (i.mask ? '/' + maskBits(i.mask) : '') : '—')}</span><span class="mono small muted">${esc(i.mac || '')}</span><span class="muted small">↓ ${fmtB(+i.rx || 0)} · ↑ ${fmtB(+i.tx || 0)}</span></button>`).join('');
     const gw = S.net && S.net.gateway && S.net.gateway.ip ? `<span class="muted small">${T('Ağ geçidi')}: <span class="mono">${esc(S.net.gateway.ip)}</span>${S.net.dns && S.net.dns.length ? ' · DNS: <span class="mono">' + esc(S.net.dns.slice(0, 2).join(', ')) + '</span>' : ''}</span>` : '';
     bar.innerHTML = `<div class="ifgrid" role="listbox" aria-label="${T('Ağ adaptörü')}">${cards}</div><input type="hidden" id="iface" value="${esc(ifc)}">${gw}<b class="sr"></b><input id="capf" class="capf" value="${esc(S.live.filter != null && S.live.since ? S.live.filter : (S.live.filter || st.capfilter || ''))}" placeholder="Yakalama filtresi (isteğe bağlı): host 192.168.1.5 and port 443" spellcheck="false" autocomplete="off">
-      <button class="btn primary" data-act="livestart" ${s.root || (s.platform === 'win32' && s.capture) ? '' : 'disabled title="Linux: sudo; Windows: Yönetici"'}>▶ Analizi başlat</button>
+      <button class="btn primary" data-act="livestart" ${canPressLiveStart(s) ? '' : 'disabled'}>▶ Analizi başlat</button>
       ${S.pk.length && S.live.since ? `<a class="btn sm" href="/api/save" download>.pcap olarak kaydet</a>` : ''}
       <span class="muted small">${opts} · <a href="#" data-act="settings">değiştir</a></span>
-      ${s.root ? '' : `<span class="muted small">Root değilsiniz: canlı analiz için ${cmd}</span>`}
+      ${liveStartHint(s)}
       <button class="btn sm ghost" data-act="analyze" title="Kapat">✕</button>`;
   }
 }
 async function liveStart() {
-  const iface = $('#iface').value, flt = ($('#capf').value || '').trim(), st = S.set;
+  const s = S.srv;
+  if (s && s.platform === 'darwin' && !s.root) {
+    toast('Canlı yakalama için sunucuyu sudo ile başlatın (start.command veya sudo python3 packetlens.py --restart)');
+    return;
+  }
+  const ifaceEl = $('#iface'), capEl = $('#capf');
+  const iface = ifaceEl ? ifaceEl.value : 'any';
+  const flt = (capEl && capEl.value ? capEl.value : '').trim();
+  const st = S.set;
   const qs = `iface=${encodeURIComponent(iface)}&filter=${encodeURIComponent(flt)}&snap=${st.snap}&max=${st.max}&duration=${st.duration}&promisc=${st.promisc ? 1 : 0}`;
   const { ok, j } = await api('/api/start?' + qs, { method: 'POST' });
-  if (!ok) { toast(j.error || 'Başlatılamadı'); return; }
+  if (!ok || j.ok === false) { toast(j.error || 'Başlatılamadı'); return; }
   S.liveOpen = false;
   S.live.running = true; S.live.since = 0; S.live.iface = iface; S.live.filter = flt; S.timeRange = null; S.pk = []; S.raw = []; S.selPkt = null; S.flowFilter = null; S.pktSet = null; S.find = null; S.appColors.clear();
   $('#empty').hidden = true; $('#app').hidden = false;

@@ -69,6 +69,9 @@ class Capture:
         if sys.platform == 'win32':
             from pl_capture_win import start_win_capture
             return start_win_capture(self, iface, flt_text, snap, max_packets, duration, promisc)
+        if sys.platform == 'darwin':
+            from pl_capture_mac import start_mac_capture
+            return start_mac_capture(self, iface, flt_text, snap, max_packets, duration, promisc)
         self.stop()
         self.snap, self.max_packets, self.duration = snap, max_packets, duration
         self.flt = compile_filter(flt_text)   # FilterError çağırana gider
@@ -130,9 +133,13 @@ class Capture:
             self.running = False
 
     def stop(self):
-        if sys.platform == 'win32' and getattr(self, '_win_proc', None):
-            from pl_capture_win import stop_win_capture
-            stop_win_capture(self)
+        if getattr(self, '_cap_proc', None):
+            if sys.platform == 'win32':
+                from pl_capture_win import stop_win_capture
+                stop_win_capture(self)
+            elif sys.platform == 'darwin':
+                from pl_capture_mac import stop_mac_capture
+                stop_mac_capture(self)
             return
         self.stop_ev.set()
         if self.thread:
@@ -168,11 +175,16 @@ def default_gateway():
 
 def interfaces():
     dumpcap_ifaces = None
+    tcpdump_ifaces = None
     if sys.platform == 'win32':
         from pl_capture_win import find_dumpcap, list_dumpcap_interfaces
         if find_dumpcap():
             dumpcap_ifaces = list_dumpcap_interfaces()
-    return list_interfaces(dumpcap_ifaces)
+    elif sys.platform == 'darwin':
+        from pl_capture_mac import find_tcpdump, list_tcpdump_interfaces
+        if find_tcpdump():
+            tcpdump_ifaces = list_tcpdump_interfaces()
+    return list_interfaces(dumpcap_ifaces, tcpdump_ifaces)
 
 
 def net_info():
@@ -184,6 +196,8 @@ def capture_backend_name():
         return None
     if sys.platform == 'win32':
         return 'dumpcap'
+    if sys.platform == 'darwin':
+        return 'tcpdump'
     if sys.platform.startswith('linux'):
         return 'af_packet'
     return None
@@ -437,14 +451,20 @@ def main():
             print('Npcap/Wireshark yok (--skip-npcap-install). .pcap analizi modu.')
             ARGS.no_capture = True
     elif sys.platform == 'darwin' and not ARGS.no_capture:
-        print('macOS: canlı yakalama yok; .pcap dosyası analizi.')
-        ARGS.no_capture = True
+        from pl_capture_mac import find_tcpdump
+        if find_tcpdump():
+            print('macOS: tcpdump ile canlı yakalama — monitör modu gerekmez; sudo önerilir.')
+        else:
+            print('macOS: tcpdump yok. Kurulum: xcode-select --install')
+            ARGS.no_capture = True
     elif not sys.platform.startswith('linux') and sys.platform != 'win32' and not ARGS.no_capture:
         ARGS.no_capture = True
     if not ARGS.no_capture and sys.platform.startswith('linux') and not is_privileged():
         print('Not: root değilsiniz, canlı yakalama başlatılamaz (dosya analizi çalışır). Canlı yakalama için: sudo python3 packetlens.py')
     if not ARGS.no_capture and sys.platform == 'win32' and not is_privileged():
         print('Not: Canlı yakalama için Yönetici olarak çalıştırmanız önerilir (Npcap).')
+    if not ARGS.no_capture and sys.platform == 'darwin' and not is_privileged():
+        print('Not: Canlı yakalama için sudo gerekir — start.command kullanın veya: sudo python3 packetlens.py')
 
     if ARGS.restart:
         stop_running_packetlens()

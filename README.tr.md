@@ -22,14 +22,14 @@ python3 packetlens.py --no-capture  # root olmadan, sadece .pcap analizi (macOS'
 
 Tarayıcı açılmazsa terminalde yazan **`http://127.0.0.1:8765`** adresini açın.
 
-**Windows:** **`start.bat`** — Npcap yoksa **otomatik kurar** (önce `winget`, olmazsa resmi Npcap indirici; gerekirse Wireshark/dumpcap). UAC/yönetici izni istenebilir. `--skip-npcap-install` ile atlanır. Wi‑Fi’de monitör modu **gerekmez**.
+**Windows:** **`start.bat`** — başlarken **UAC ile yönetici** sorar (canlı yakalama / Npcap). Reddederseniz `.pcap` analizi modu. Npcap otomatik kurulabilir. `--skip-npcap-install` ile atlanır.
 
-**macOS:** **`start.command`** — yalnızca `.pcap` analizi (canlı yakalama yok). `index.html`’e doğrudan tıklamayın (`file://`).
+**macOS:** **`start.command`** — canlı yakalama **tcpdump** ile (sudo; monitör modu gerekmez). Sudo yoksa `.pcap` analizi. `index.html`’e doğrudan tıklamayın (`file://`).
 
 **Linux (Kali vb.):** komut yazmak yerine dosya yöneticinizde **`start.sh`** dosyasına çift tıklayıp "Çalıştır" / "Terminalde çalıştır" seçin — canlı yakalama için sudo parolanızı sorar, tarayıcıyı otomatik açar; root yoksa dosya analizi moduna düşer. Uygulamalar menüsüne (ve masaüstüne) gerçek bir **PacketLens** simgesi eklemek için bir kez `./install-desktop-launcher.sh` çalıştırın.
 Seçenekler: `-i eth0` (varsayılan arayüz), `--port 9000`, `--no-browser`, `--scan-interval DK` (periyodik ARP taraması, root).
 Sunucu olmadan `index.html` dosyasını doğrudan açıp `.pcap` / `.pcapng` yükleyebilirsiniz (canlı analiz ve ptentes çalışmaz).
-macOS’ta canlı yakalama yoktur. Windows’ta Npcap yoksa `python packetlens.py --no-capture` ile yalnızca dosya analizi.
+macOS’ta canlı yakalama **tcpdump + sudo** ile. Windows’ta Npcap yoksa `--no-capture` ile yalnızca dosya analizi.
 Uygulamayı denemek için **☰ Menü → Örnek yükle**.
 
 ## Kendi ağınızı analiz edin

@@ -191,6 +191,76 @@ def interfaces_windows(dumpcap_ifaces=None):
     return res
 
 
+def _ifconfig_darwin(name):
+    try:
+        out = subprocess.check_output(['ifconfig', name], text=True, errors='replace', timeout=8)
+    except Exception:
+        return '', '', 'down'
+    state = 'up' if re.search(r'status:\s*active', out, re.I) or re.match(r'\S+:\s*flags=\d+<[^>]*UP', out) else 'down'
+    ipv4 = ''
+    m = re.search(r'\binet (\d+\.\d+\.\d+\.\d+)', out)
+    if m:
+        ipv4 = m.group(1)
+    mac = ''
+    m = re.search(r'\bether ([0-9a-f:]+)', out, re.I)
+    if m:
+        mac = m.group(1).lower()
+    return ipv4, mac, state
+
+
+def interfaces_darwin(tcpdump_ifaces=None):
+    res = []
+    rows = tcpdump_ifaces or []
+    if not rows:
+        try:
+            names = subprocess.check_output(['ifconfig', '-l'], text=True, timeout=8).split()
+            rows = [{'id': n, 'label': n, 'state': 'up', 'default': i == 0} for i, n in enumerate(names)]
+        except Exception:
+            rows = []
+    gi = net_info_darwin()['gateway'].get('iface') or ''
+    for row in rows:
+        name = row['id']
+        ipv4, mac, st = _ifconfig_darwin(name)
+        res.append({
+            'name': name,
+            'state': st if st else row.get('state', 'up'),
+            'kind': _guess_kind(row.get('label', name)),
+            'mac': mac,
+            'ipv4': ipv4,
+            'mask': '',
+            'speed': None,
+            'mtu': '',
+            'rx': '0',
+            'tx': '0',
+            'default': name == gi or row.get('default', False),
+            'label': row.get('label', name),
+        })
+    return res
+
+
+def net_info_darwin():
+    gi, gip = '', ''
+    dns = []
+    try:
+        out = subprocess.check_output(['route', '-n', 'get', 'default'], text=True, errors='replace', timeout=8)
+        for line in out.splitlines():
+            if line.strip().startswith('interface:'):
+                gi = line.split(':', 1)[1].strip()
+            if line.strip().startswith('gateway:'):
+                gip = line.split(':', 1)[1].strip()
+    except Exception:
+        pass
+    try:
+        out = subprocess.check_output(['scutil', '--dns'], text=True, errors='replace', timeout=8)
+        for line in out.splitlines():
+            m = re.search(r'nameserver\[0\] :\s*(\S+)', line)
+            if m:
+                dns.append(m.group(1))
+    except Exception:
+        pass
+    return {'gateway': {'iface': gi, 'ip': gip}, 'dns': dns[:4], 'arp': []}
+
+
 def net_info_windows():
     gip, gi = '', ''
     dns = []
@@ -209,13 +279,17 @@ def net_info_windows():
     return {'gateway': {'iface': gi, 'ip': gip}, 'dns': dns, 'arp': []}
 
 
-def list_interfaces(dumpcap_ifaces=None):
+def list_interfaces(dumpcap_ifaces=None, tcpdump_ifaces=None):
     if sys.platform == 'win32':
         return interfaces_windows(dumpcap_ifaces)
+    if sys.platform == 'darwin':
+        return interfaces_darwin(tcpdump_ifaces)
     return interfaces_linux()
 
 
 def network_info():
     if sys.platform == 'win32':
         return net_info_windows()
+    if sys.platform == 'darwin':
+        return net_info_darwin()
     return net_info_linux()

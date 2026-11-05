@@ -1,11 +1,11 @@
 """Windows canlı yakalama: Wireshark dumpcap + Npcap (monitör modu gerekmez)."""
 import os
 import re
-import struct
 import subprocess
 import sys
 import threading
-import time
+
+from pl_pcap_stream import pcap_stdout_loop, stop_subproc_capture
 
 
 def find_dumpcap():
@@ -55,52 +55,6 @@ def _resolve_iface_id(iface, dumpcap_ifaces):
     return str(iface)
 
 
-def _pcap_loop(capture, proc, stop_ev, snap, max_packets, duration):
-    t_end = time.time() + duration if duration else None
-    buf = b''
-    try:
-        while not stop_ev.is_set():
-            if t_end and time.time() >= t_end:
-                break
-            chunk = proc.stdout.read(65536)
-            if not chunk:
-                if proc.poll() is not None:
-                    break
-                continue
-            buf += chunk
-            if len(buf) < 24:
-                continue
-            if struct.unpack('<I', buf[:4])[0] != 0xA1B2C3D4:
-                capture.error = 'dumpcap pcap akışı okunamadı'
-                break
-            if len(buf) == 24:
-                continue
-            pos = 24
-            while pos + 16 <= len(buf):
-                ts_sec, ts_usec, incl, orig = struct.unpack('<IIII', buf[pos:pos + 16])
-                end = pos + 16 + incl
-                if end > len(buf):
-                    break
-                data = buf[pos + 16:end]
-                pos = end
-                with capture.lock:
-                    if len(capture.packets) >= max_packets:
-                        capture.dropped += 1
-                        continue
-                    capture.packets.append((ts_sec + ts_usec / 1e6, orig, data[:snap]))
-            buf = buf[pos:]
-    finally:
-        try:
-            proc.terminate()
-            proc.wait(timeout=2)
-        except Exception:
-            try:
-                proc.kill()
-            except Exception:
-                pass
-        capture.running = False
-
-
 def start_win_capture(capture, iface, flt_text, snap, max_packets, duration, promisc):
     dc = find_dumpcap()
     if not dc:
@@ -131,25 +85,15 @@ def start_win_capture(capture, iface, flt_text, snap, max_packets, duration, pro
         return False
     capture.stop_ev.clear()
     capture.running = True
+    capture._cap_proc = proc
     capture.thread = threading.Thread(
-        target=_pcap_loop,
+        target=pcap_stdout_loop,
         args=(capture, proc, capture.stop_ev, snap, max_packets, duration),
         daemon=True,
     )
-    capture._win_proc = proc
     capture.thread.start()
     return True
 
 
 def stop_win_capture(capture):
-    capture.stop_ev.set()
-    proc = getattr(capture, '_win_proc', None)
-    if proc:
-        try:
-            proc.terminate()
-        except Exception:
-            pass
-    if capture.thread:
-        capture.thread.join(timeout=2)
-    capture.thread = None
-    capture.running = False
+    stop_subproc_capture(capture)

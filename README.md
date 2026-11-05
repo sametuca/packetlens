@@ -22,12 +22,12 @@ python3 packetlens.py --no-capture  # no root: analyze .pcap files only (works o
 
 If the browser does not open, go to **`http://127.0.0.1:8765`** (or the port shown in the terminal).
 
-**macOS:** double-click **`start.command`** in the project folder instead of typing commands — it starts the server and opens your browser at the right URL automatically. Do not double-click `index.html` directly: that opens the page without a server (`file://`) and live analysis will not work.
+**macOS:** double-click **`start.command`** — live capture via **tcpdump** (sudo; no monitor mode). Without sudo, file analysis only. Do not open `index.html` directly (`file://`).
 
 **Linux (Kali, etc.):** double-click **`start.sh`** in your file manager (choose "Run" / "Run in Terminal") instead of typing commands — it asks for your sudo password for live capture and opens your browser automatically; without root it falls back to file analysis. Run `./install-desktop-launcher.sh` once to add a proper **PacketLens** icon to your Applications menu (and Desktop).
 Options: `-i eth0` (default interface), `--port 9000`, `--no-browser`, `--scan-interval MIN` (scheduled ARP scan, root).
 You can open `index.html` directly and load a `.pcap` / `.pcapng` without the server (no live capture or ptentes).
-On macOS/Windows there is no live packet capture; use `python3 packetlens.py --no-capture` for file analysis.
+**macOS:** live capture with `sudo python3 packetlens.py` (tcpdump). **Windows:** `start.bat` prompts for **Administrator (UAC)** then installs Npcap if needed. Use `--no-capture` for file-only mode.
 Open the **☰ Menu → Load sample** to try the app with a built-in capture.
 
 ## Analyze your own network
