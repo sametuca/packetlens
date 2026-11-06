@@ -25,13 +25,22 @@ def is_privileged():
 def stop_running_packetlens():
     me = os.getpid()
     if sys.platform == 'win32':
+        port = 8765
+        try:
+            port = int(ARGS.port)
+        except Exception:
+            port = 8765
         try:
             subprocess.run([
                 'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
+                '$me = %d; $port = %d; '
                 'Get-CimInstance Win32_Process | Where-Object { '
-                '($_.Name -eq "python.exe" -or $_.Name -eq "python3.exe") -and '
-                '$_.CommandLine -like "*packetlens.py*" -and $_.ProcessId -ne %d '
-                '} | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }' % me,
+                '($_.Name -eq "python.exe" -or $_.Name -eq "python3.exe" -or $_.Name -eq "py.exe") -and '
+                '$_.CommandLine -like "*packetlens.py*" -and $_.ProcessId -ne $me '
+                '} | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; '
+                'Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | '
+                'Where-Object { $_.OwningProcess -ne $me -and $_.OwningProcess -gt 0 } | '
+                'ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }' % (me, port),
             ], capture_output=True, timeout=25)
         except Exception:
             pass
@@ -146,20 +155,35 @@ def interfaces_windows(dumpcap_ifaces=None):
     """dumpcap -D listesi varsa onu kullan (yakalama indeksleri); yoksa PowerShell."""
     res = []
     if dumpcap_ifaces:
+        snap = windows_net_snapshot()
+        alias = (snap.get('alias') or '').lower()
+        adapters = snap.get('adapters') or {}
         for row in dumpcap_ifaces:
+            label = row.get('label', '')
+            friendly = windows_adapter_name(label)
+            info = adapters.get(friendly) or {}
+            status = (info.get('status') or '').lower()
+            if status in ('up', 'connected'):
+                state = 'up'
+            elif status:
+                state = 'down'
+            elif _hidden_windows_adapter(friendly):
+                state = 'down'
+            else:
+                state = 'up'
             res.append({
                 'name': row['id'],
-                'state': 'up',
-                'kind': _guess_kind(row.get('label', '')),
-                'mac': '',
+                'state': state,
+                'kind': _guess_kind(label),
+                'mac': info.get('mac') or '',
                 'ipv4': '',
                 'mask': '',
                 'speed': None,
                 'mtu': '',
                 'rx': '0',
                 'tx': '0',
-                'default': row.get('default', False),
-                'label': row.get('label', ''),
+                'default': bool(alias) and friendly.lower() == alias,
+                'label': friendly or label,
             })
         return res
     try:
@@ -261,8 +285,64 @@ def net_info_darwin():
     return {'gateway': {'iface': gi, 'ip': gip}, 'dns': dns[:4], 'arp': []}
 
 
+def windows_adapter_name(label):
+    """dumpcap satırındaki parantez içi ad: '\\Device\\NPF_{…} (Wi-Fi)' → 'Wi-Fi'."""
+    text = label or ''
+    if not text.endswith(')'):
+        return ''
+    depth = 0
+    for i in range(len(text) - 1, -1, -1):
+        if text[i] == ')':
+            depth += 1
+        elif text[i] == '(':
+            depth -= 1
+            if depth == 0:
+                return text[i + 1:-1].strip()
+    return ''
+
+
+def _hidden_windows_adapter(name):
+    n = (name or '').lower()
+    if n.startswith('local area connection'):
+        return True
+    if 'loopback' in n or 'vethernet' in n or n.startswith('bluetooth'):
+        return True
+    return False
+
+
+def windows_net_snapshot():
+    """Varsayılan yolun adaptör adı ve Get-NetAdapter durumu."""
+    alias, gateway, adapters = '', '', {}
+    script = (
+        "$r = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue "
+        "| Sort-Object RouteMetric,InterfaceMetric | Select-Object -First 1; "
+        "if ($r) { Write-Output ('ROUTE|' + $r.InterfaceAlias + '|' + $r.NextHop) }; "
+        "Get-NetAdapter -ErrorAction SilentlyContinue | ForEach-Object { "
+        "Write-Output ('IF|' + $_.Name + '|' + $_.Status + '|' + $_.MacAddress + '|' + $_.InterfaceDescription) }"
+    )
+    try:
+        out = subprocess.check_output(
+            ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+            text=True, errors='replace', timeout=20,
+        )
+    except Exception:
+        out = ''
+    for line in out.splitlines():
+        parts = line.strip().split('|')
+        if len(parts) >= 3 and parts[0] == 'ROUTE':
+            alias, gateway = parts[1], parts[2]
+        elif len(parts) >= 4 and parts[0] == 'IF':
+            adapters[parts[1]] = {
+                'status': parts[2],
+                'mac': (parts[3] if len(parts) > 3 else '').replace('-', ':').lower(),
+                'desc': parts[4] if len(parts) > 4 else '',
+            }
+    return {'alias': alias, 'gateway': gateway, 'adapters': adapters}
+
+
 def net_info_windows():
-    gip, gi = '', ''
+    snap = windows_net_snapshot()
+    gip, gi = snap.get('gateway') or '', snap.get('alias') or ''
     dns = []
     try:
         out = subprocess.check_output(['ipconfig'], text=True, errors='replace', timeout=15)

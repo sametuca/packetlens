@@ -27,7 +27,7 @@ If the browser does not open, go to **`http://127.0.0.1:8765`** (or the port sho
 **Linux (Kali, etc.):** double-click **`start.sh`** in your file manager (choose "Run" / "Run in Terminal") instead of typing commands — it asks for your sudo password for live capture and opens your browser automatically; without root it falls back to file analysis. Run `./install-desktop-launcher.sh` once to add a proper **PacketLens** icon to your Applications menu (and Desktop).
 Options: `-i eth0` (default interface), `--port 9000`, `--no-browser`, `--scan-interval MIN` (scheduled ARP scan, root).
 You can open `index.html` directly and load a `.pcap` / `.pcapng` without the server (no live capture or ptentes).
-**macOS:** live capture with `sudo python3 packetlens.py` (tcpdump). **Windows:** `start.bat` prompts for **Administrator (UAC)** then installs Npcap if needed. Use `--no-capture` for file-only mode.
+**macOS:** live capture with `sudo python3 packetlens.py` (tcpdump). **Windows:** double-click **`PacketLens.vbs`** (or the **PacketLens** desktop icon). No console; approve the UAC prompt and the UI opens in the browser. The first launch may download Wireshark and show the Npcap installer. If you decline admin rights, only `.pcap` analysis opens.
 Open the **☰ Menu → Load sample** to try the app with a built-in capture.
 
 ## Analyze your own network

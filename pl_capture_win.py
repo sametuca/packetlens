@@ -6,6 +6,7 @@ import sys
 import threading
 
 from pl_pcap_stream import pcap_stdout_loop, stop_subproc_capture
+from pl_platform import _hidden_windows_adapter, windows_adapter_name, windows_net_snapshot
 
 
 def find_dumpcap():
@@ -43,12 +44,34 @@ def list_dumpcap_interfaces(dumpcap=None):
     return res
 
 
+def _skip_windows_adapter(label):
+    name = windows_adapter_name(label)
+    if _hidden_windows_adapter(name) or _hidden_windows_adapter(label):
+        return True
+    low = (label or '').lower()
+    if 'hyper-v' in low or 'virtual' in low or 'vmware' in low or 'virtualbox' in low:
+        return True
+    return False
+
+
+def internet_iface_id(dumpcap_ifaces, route_alias=''):
+    """'any' gerçek bir dumpcap arayüzü değil. İnternet çıkışını seç."""
+    if not dumpcap_ifaces:
+        return '1'
+    alias = (route_alias or '').strip().lower()
+    if alias:
+        for row in dumpcap_ifaces:
+            if windows_adapter_name(row.get('label', '')).lower() == alias:
+                return row['id']
+    for row in dumpcap_ifaces:
+        if not _skip_windows_adapter(row.get('label', '')):
+            return row['id']
+    return dumpcap_ifaces[0]['id']
+
+
 def _resolve_iface_id(iface, dumpcap_ifaces):
     if not iface or iface == 'any':
-        for row in dumpcap_ifaces:
-            if 'loopback' not in row.get('label', '').lower():
-                return row['id']
-        return dumpcap_ifaces[0]['id'] if dumpcap_ifaces else '1'
+        return internet_iface_id(dumpcap_ifaces, windows_net_snapshot().get('alias') or '')
     for row in dumpcap_ifaces:
         if row['id'] == str(iface) or row.get('label') == iface:
             return row['id']

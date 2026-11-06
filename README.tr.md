@@ -22,7 +22,7 @@ python3 packetlens.py --no-capture  # root olmadan, sadece .pcap analizi (macOS'
 
 Tarayıcı açılmazsa terminalde yazan **`http://127.0.0.1:8765`** adresini açın.
 
-**Windows:** **`start.bat`** — başlarken **UAC ile yönetici** sorar (canlı yakalama / Npcap). Reddederseniz `.pcap` analizi modu. Npcap otomatik kurulabilir. `--skip-npcap-install` ile atlanır.
+**Windows:** **`PacketLens.vbs`** dosyasına çift tıklayın (veya masaüstündeki **PacketLens** simgesi). Konsol açılmaz; UAC’de Evet’e basın, arayüz tarayıcıda gelir. İlk seferde Wireshark indirilebilir ve Npcap penceresi çıkar. Yönetici onayı verilmezse yalnızca `.pcap` analizi açılır.
 
 **macOS:** **`start.command`** — canlı yakalama **tcpdump** ile (sudo; monitör modu gerekmez). Sudo yoksa `.pcap` analizi. `index.html`’e doğrudan tıklamayın (`file://`).
 

@@ -2,10 +2,39 @@
 import struct
 import time
 
+# İlk 4 baytın little-endian değeri → (kayıt endian'ı, zaman böleni)
+# 0xA1B23C4D: dumpcap 4.x libpcap çıktısı, kesir nanosaniye.
+_PCAP_CLOCK = {
+    0xA1B2C3D4: ('<', 1e6),
+    0xA1B23C4D: ('<', 1e9),
+    0xD4C3B2A1: ('>', 1e6),
+    0x4D3CB2A1: ('>', 1e9),
+}
+
+
+def take_pcap_packets(buf, fmt, div, snap, limit):
+    """Başlığı tüketilmiş pcap gövdesinden tam paketleri ayırır.
+
+    Dönüş: (paketler, kalan, hata).
+    """
+    out = []
+    while len(buf) >= 16 and len(out) < limit:
+        ts_sec, ts_frac, incl, orig = struct.unpack(fmt + 'IIII', buf[:16])
+        if incl > 1048576:
+            return out, buf, 'pcap akışı okunamadı'
+        if len(buf) < 16 + incl:
+            break
+        data = buf[16:16 + incl]
+        buf = buf[16 + incl:]
+        out.append((ts_sec + ts_frac / div, orig, data[:snap]))
+    return out, buf, None
+
 
 def pcap_stdout_loop(capture, proc, stop_ev, snap, max_packets, duration):
     t_end = time.time() + duration if duration else None
     buf = b''
+    fmt = None
+    div = 1e6
     try:
         while not stop_ev.is_set():
             if t_end and time.time() >= t_end:
@@ -16,29 +45,35 @@ def pcap_stdout_loop(capture, proc, stop_ev, snap, max_packets, duration):
                     break
                 continue
             buf += chunk
-            if len(buf) < 24:
-                continue
-            if struct.unpack('<I', buf[:4])[0] != 0xA1B2C3D4:
-                capture.error = 'pcap akışı okunamadı'
-                break
-            if len(buf) == 24:
-                continue
-            pos = 24
-            while pos + 16 <= len(buf):
-                ts_sec, ts_usec, incl, orig = struct.unpack('<IIII', buf[pos:pos + 16])
-                end = pos + 16 + incl
-                if end > len(buf):
-                    break
-                data = buf[pos + 16:end]
-                pos = end
-                if capture.flt and not capture.flt(data):
+            if fmt is None:
+                if len(buf) < 24:
                     continue
-                with capture.lock:
-                    if len(capture.packets) >= max_packets:
-                        capture.dropped += 1
+                clock = _PCAP_CLOCK.get(struct.unpack('<I', buf[:4])[0])
+                if not clock:
+                    capture.error = 'pcap akışı okunamadı'
+                    break
+                fmt, div = clock
+                buf = buf[24:]
+            with capture.lock:
+                room = max_packets - len(capture.packets)
+            if room <= 0:
+                capture.dropped += 1
+                buf = b''
+                continue
+            pkts, buf, err = take_pcap_packets(buf, fmt, div, snap, room)
+            if err:
+                capture.error = err
+                break
+            if not pkts:
+                continue
+            with capture.lock:
+                space = max_packets - len(capture.packets)
+                keep = pkts[:space]
+                capture.dropped += len(pkts) - len(keep)
+                for ts, orig, data in keep:
+                    if capture.flt and not capture.flt(data):
                         continue
-                    capture.packets.append((ts_sec + ts_usec / 1e6, orig, data[:snap]))
-            buf = buf[pos:]
+                    capture.packets.append((ts, orig, data))
     finally:
         try:
             proc.terminate()

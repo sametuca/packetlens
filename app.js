@@ -502,6 +502,7 @@ async function initServer() {
       await loadNet();
       if (PL && PL.loadOui) await Promise.resolve(PL.loadOui());
       if (!S.A && !S.live.running) renderLiveHome();
+      maybeAutoLive();
       if (window.PLApp && window.PLApp.checkUpdate) window.PLApp.checkUpdate(j.commit);
     } catch (e2) { /* yan etkiler sunucu bağlantısını bozmaz */ }
     renderLivebar();
@@ -515,6 +516,14 @@ async function initServer() {
     renderLivebar();
   }
 }
+let autoLiveOnce = false;
+function maybeAutoLive() {
+  if (autoLiveOnce) return;
+  const s = S.srv;
+  if (!s || s.platform !== 'win32' || !s.capture || S.A || S.live.running) return;
+  autoLiveOnce = true;
+  liveStart();
+}
 function canPressLiveStart(s) {
   if (!s || !s.capture) return false;
   if (s.platform === 'darwin') return !!s.root;
@@ -525,6 +534,7 @@ function pickDefaultIface(ifaces, st, s) {
   const gw = S.net && S.net.gateway && S.net.gateway.iface;
   const defIf = (ifaces.find(i => i.default) || {}).name;
   let ifc = S.live.iface && S.live.iface !== 'any' ? S.live.iface : (st.iface || s.default_iface || defIf || 'any');
+  if (s.platform === 'win32' && (!ifc || ifc === 'any')) ifc = defIf || 'any';
   if (ifc !== 'any' && s.platform === 'darwin' && /^ap\d/i.test(ifc)) {
     const alt = ifaces.find(i => i.name === gw && i.state === 'up')
       || ifaces.find(i => /^en\d/i.test(i.name) && i.ipv4 && i.state === 'up')
@@ -676,6 +686,10 @@ async function liveStart() {
   try {
     const ifaceEl = $('#iface'), capEl = $('#capf');
     let iface = ifaceEl ? ifaceEl.value : 'any';
+    if (s && s.platform === 'win32' && (!iface || iface === 'any')) {
+      const pref = (s.interfaces || []).find(i => i.default && i.state === 'up') || (s.interfaces || []).find(i => i.default);
+      if (pref) iface = pref.name;
+    }
     if (s && s.platform === 'darwin' && /^ap\d/i.test(iface)) {
       const ifaces = s.interfaces || [];
       const gw = S.net && S.net.gateway && S.net.gateway.iface;
@@ -703,8 +717,9 @@ async function liveStart() {
       await api('/api/stop', { method: 'POST' });
       return;
     }
+    const shown = (s.interfaces || []).find(i => i.name === ((j && j.iface) || iface));
     S.liveOpen = false;
-    S.live.since = 0; S.live.iface = iface; S.live.filter = flt; S.timeRange = null; S.pk = []; S.raw = []; S.selPkt = null; S.flowFilter = null; S.pktSet = null; S.find = null; S.appColors.clear();
+    S.live.since = 0; S.live.iface = (j && j.iface_label) || (shown && shown.label) || iface; S.live.filter = flt; S.timeRange = null; S.pk = []; S.raw = []; S.selPkt = null; S.flowFilter = null; S.pktSet = null; S.find = null; S.appColors.clear();
     S.A = pl.analyze([]); S.A.nm = ip => ip; S.vis = []; S.visFlows = new Set();
     S.live.running = true;
     syncScreen();

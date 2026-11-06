@@ -356,7 +356,12 @@ class H(BaseHTTPRequestHandler):
                                num('duration', 0, 0, 86400), q.get('promisc', ['1'])[0] != '0')
             except FilterError as e:
                 return self._send(400, {'ok': False, 'error': 'Yakalama filtresi hatası: %s' % e})
-            return self._send(200 if ok else 400, {'ok': ok, 'error': CAP.error})
+            label = ''
+            for row in interfaces():
+                if row.get('name') == CAP.iface:
+                    label = row.get('label') or ''
+                    break
+            return self._send(200 if ok else 400, {'ok': ok, 'error': CAP.error, 'iface': CAP.iface, 'iface_label': label})
         if u.path == '/api/stop' and method == 'POST':
             CAP.stop()
             return self._send(200, {'ok': True})
@@ -452,7 +457,10 @@ def open_browser(url):
             subprocess.Popen(['sudo', '-u', user, '--preserve-env=DISPLAY,WAYLAND_DISPLAY,XDG_RUNTIME_DIR,XAUTHORITY', 'xdg-open', url],
                              env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return
-        webbrowser.open(url)
+        if sys.platform == 'win32':
+            os.startfile(url)
+        else:
+            webbrowser.open(url)
     except Exception:
         pass
 
