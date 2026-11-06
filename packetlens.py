@@ -479,13 +479,13 @@ def main():
     scan_stop = threading.Event()
     if sys.platform == 'win32' and not ARGS.no_capture:
         from pl_capture_win import find_dumpcap
-        from pl_install_win import ensure_capture_ready
-        if find_dumpcap():
+        from pl_install_win import ensure_capture_ready, npcap_installed
+        if find_dumpcap() and npcap_installed():
             print('Windows: dumpcap ile canlı yakalama — monitör modu gerekmez.')
         elif not ARGS.skip_npcap_install:
             if ensure_capture_ready(elevated_child=ARGS.elevated_child):
                 print('Windows: canlı yakalama hazır.')
-            elif not find_dumpcap():
+            else:
                 print('Canlı yakalama açılamadı; yalnızca .pcap analizi (--no-capture).')
                 ARGS.no_capture = True
         else:

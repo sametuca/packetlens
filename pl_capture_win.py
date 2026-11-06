@@ -58,7 +58,7 @@ def _resolve_iface_id(iface, dumpcap_ifaces):
 def start_win_capture(capture, iface, flt_text, snap, max_packets, duration, promisc):
     dc = find_dumpcap()
     if not dc:
-        capture.error = 'dumpcap bulunamadı. Programı yeniden başlatın (Npcap otom kurulur) veya: winget install WiresharkFoundation.Wireshark'
+        capture.error = 'dumpcap bulunamadı. start.bat ile yeniden başlatın; Wireshark otomatik kurulur.'
         return False
     ifaces = list_dumpcap_interfaces(dc)
     if not ifaces:

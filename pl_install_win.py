@@ -1,24 +1,155 @@
-"""Windows: Npcap + Wireshark (dumpcap) otomatik kurulum."""
+"""Windows: Wireshark (dumpcap) ve Npcap kurulumu.
+
+winget kaynak hatası (0x8a15000f) kurulumun önüne geçmez: paketler
+resmi siteden indirilir. Wireshark sessiz kurulur. Npcap ücretsiz
+sürümü sessiz kurulumu desteklemez; kurulum penceresi açılır ve
+kullanıcı bitirene kadar beklenir.
+"""
 import os
+import platform
+import re
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.request
 
+from pl_capture_win import find_dumpcap
 from pl_platform import is_privileged
 
-# Resmi dağıtım; güncel sürüm: https://npcap.com/#download
-NPCAP_INSTALLER_URL = 'https://npcap.com/dist/npcap-1.79.exe'
-NPCAP_SILENT = ['/S', '/winpcap_mode=yes', '/loopback_support=yes', '/admin_only=no']
+_NOWINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+_UA = {'User-Agent': 'PacketLens/1.0'}
+
+# İndeks okunamazsa kullanılan kararlı adresler.
+_NPCAP_FALLBACK = 'https://npcap.com/dist/npcap-1.90.exe'
+_WS_FALLBACK = {
+    'x64': 'Wireshark-4.6.9-x64.exe',
+    'arm64': 'Wireshark-4.6.9-arm64.exe',
+}
+# Ücretsiz Npcap'te /S yoktur (yalnızca OEM). Seçenekler GUI'de önceden işaretlenir.
+_NPCAP_GUI_ARGS = ['/winpcap_mode=yes', '/loopback_support=yes', '/admin_only=no']
+_WS_SILENT_ARGS = ['/S', '/desktopicon=no']
+
+_NPCAP_EXE = re.compile(r'npcap-(\d+)\.(\d+)\.exe', re.I)
+_WS_STABLE = {
+    'x64': re.compile(r'Wireshark-(\d+)\.(\d+)\.(\d+)-x64\.exe'),
+    'arm64': re.compile(r'Wireshark-(\d+)\.(\d+)\.(\d+)-arm64\.exe'),
+}
+
+_WINGET_SOURCE = None
+
+
+def windows_arch():
+    machine = platform.machine().lower()
+    if machine in ('arm64', 'aarch64'):
+        return 'arm64'
+    return 'x64'
+
+
+def pick_npcap_name(html):
+    versions = {(int(a), int(b)) for a, b in _NPCAP_EXE.findall(html or '')}
+    if not versions:
+        return None
+    major, minor = max(versions)
+    return 'npcap-%d.%d.exe' % (major, minor)
+
+
+def pick_wireshark_name(html, arch):
+    pattern = _WS_STABLE.get(arch) or _WS_STABLE['x64']
+    stables = []
+    for major, minor, patch in pattern.findall(html or ''):
+        major, minor, patch = int(major), int(minor), int(patch)
+        if minor % 2 == 0:
+            stables.append((major, minor, patch))
+    if not stables:
+        return None
+    major, minor, patch = max(stables)
+    suffix = 'arm64' if arch == 'arm64' else 'x64'
+    return 'Wireshark-%d.%d.%d-%s.exe' % (major, minor, patch, suffix)
+
+
+def _hidden():
+    if sys.platform == 'win32' and _NOWINDOW:
+        return {'creationflags': _NOWINDOW}
+    return {}
+
+
+def _fetch_text(url):
+    req = urllib.request.Request(url, headers=_UA)
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return resp.read().decode('utf-8', 'replace')
+
+
+def npcap_installer_urls():
+    name = None
+    try:
+        name = pick_npcap_name(_fetch_text('https://npcap.com/dist/'))
+    except Exception:
+        name = None
+    urls = []
+    if name:
+        urls.append('https://npcap.com/dist/' + name)
+    if _NPCAP_FALLBACK not in urls:
+        urls.append(_NPCAP_FALLBACK)
+    return urls
+
+
+def wireshark_installer_urls():
+    arch = windows_arch()
+    name = None
+    try:
+        name = pick_wireshark_name(_fetch_text('https://www.wireshark.org/download/win64/'), arch)
+    except Exception:
+        name = None
+    if not name:
+        name = _WS_FALLBACK.get(arch) or _WS_FALLBACK['x64']
+    return [
+        'https://www.wireshark.org/download/win64/' + name,
+        'https://2.na.dl.wireshark.org/win64/' + name,
+    ]
 
 
 def _winget_ok():
     try:
-        r = subprocess.run(['winget', '--version'], capture_output=True, timeout=10)
+        r = subprocess.run(
+            ['winget', '--version'],
+            capture_output=True, timeout=15, **_hidden(),
+        )
         return r.returncode == 0
     except Exception:
         return False
+
+
+def winget_source_ok():
+    """Paket kaynağı gerçekten arama yapabiliyor mu? Sürüm komutu yetmez."""
+    global _WINGET_SOURCE
+    if _WINGET_SOURCE is not None:
+        return _WINGET_SOURCE
+    if not _winget_ok():
+        _WINGET_SOURCE = False
+        return False
+    try:
+        r = subprocess.run(
+            [
+                'winget', 'search', '--id', 'WiresharkFoundation.Wireshark', '-e',
+                '-n', '1', '--accept-source-agreements', '--disable-interactivity',
+            ],
+            capture_output=True, text=True, timeout=45, **_hidden(),
+        )
+    except Exception:
+        _WINGET_SOURCE = False
+        return False
+    blob = ((r.stdout or '') + '\n' + (r.stderr or '')).lower()
+    broken = (
+        r.returncode != 0
+        or '0x8a15000f' in blob
+        or 'failed when searching source' in blob
+        or 'data required by the source is missing' in blob
+    )
+    if broken:
+        print('winget paket kaynağı kullanılamıyor; kurulum dosyası doğrudan indirilecek.')
+    _WINGET_SOURCE = not broken
+    return _WINGET_SOURCE
 
 
 def npcap_installed():
@@ -36,7 +167,19 @@ def npcap_installed():
     except ImportError:
         pass
     sysroot = os.environ.get('SystemRoot', r'C:\Windows')
-    return os.path.isdir(os.path.join(sysroot, 'System32', 'Npcap'))
+    npcap_dir = os.path.join(sysroot, 'System32', 'Npcap')
+    if os.path.isdir(npcap_dir):
+        return True
+    try:
+        r = subprocess.run(
+            ['sc', 'query', 'npcap'],
+            capture_output=True, text=True, timeout=10, **_hidden(),
+        )
+        if r.returncode == 0 and 'STATE' in (r.stdout or '').upper():
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def relaunch_as_admin():
@@ -61,56 +204,141 @@ def relaunch_as_admin():
 
 
 def _run_winget(package_id, label):
-    print('winget ile %s kuruluyor (birkaç dakika sürebilir)…' % label)
+    if not winget_source_ok():
+        return False
+    print('winget ile %s kuruluyor…' % label, flush=True)
     try:
-        r = subprocess.run([
-            'winget', 'install', '--id', package_id, '-e',
-            '--accept-package-agreements', '--accept-source-agreements',
-            '--disable-interactivity',
-        ], timeout=900)
-        return r.returncode == 0
-    except Exception as e:
-        print('winget hatası: %s' % e)
+        r = subprocess.run(
+            [
+                'winget', 'install', '--id', package_id, '-e',
+                '--accept-package-agreements', '--accept-source-agreements',
+                '--disable-interactivity',
+            ],
+            capture_output=True, text=True, timeout=900, **_hidden(),
+        )
+    except Exception:
+        print('winget %s kurulumunu başlatamadı.' % label)
+        return False
+    if r.returncode == 0:
+        return True
+    print('winget %s kurulumunu tamamlayamadı.' % label)
+    return False
+
+
+def _looks_like_installer(path, min_size):
+    try:
+        if os.path.getsize(path) < min_size:
+            return False
+        with open(path, 'rb') as handle:
+            return handle.read(2) == b'MZ'
+    except OSError:
         return False
 
 
-def _download_npcap_installer(dest):
-    print('Npcap indiriliyor…')
-    req = urllib.request.Request(NPCAP_INSTALLER_URL, headers={'User-Agent': 'PacketLens/1.0'})
-    with urllib.request.urlopen(req, timeout=120) as resp, open(dest, 'wb') as f:
-        while True:
-            chunk = resp.read(256 * 1024)
-            if not chunk:
-                break
-            f.write(chunk)
-    return os.path.getsize(dest) > 100000
-
-
-def _install_npcap_exe(installer_path):
-    print('Npcap sessiz kurulum…')
+def _unblock(path):
     try:
-        r = subprocess.run([installer_path] + NPCAP_SILENT, timeout=600)
-        return r.returncode == 0
-    except Exception as e:
-        print('Npcap kurulum hatası: %s' % e)
-        return False
+        os.remove(path + ':Zone.Identifier')
+    except OSError:
+        pass
+
+
+def _download(urls, dest, label, min_size):
+    last_error = ''
+    for url in urls:
+        try:
+            print('%s indiriliyor…' % label, flush=True)
+            req = urllib.request.Request(url, headers=_UA)
+            with urllib.request.urlopen(req, timeout=180) as resp, open(dest, 'wb') as handle:
+                total = int(resp.headers.get('Content-Length') or 0)
+                got = 0
+                next_mark = 25
+                while True:
+                    chunk = resp.read(256 * 1024)
+                    if not chunk:
+                        break
+                    handle.write(chunk)
+                    got += len(chunk)
+                    if total and got * 100 // total >= next_mark:
+                        print('  %d%%' % min(100, got * 100 // total), flush=True)
+                        next_mark += 25
+            if _looks_like_installer(dest, min_size):
+                _unblock(dest)
+                return True
+            last_error = 'indirilen dosya kurulum paketi değil'
+        except Exception as exc:
+            last_error = exc.__class__.__name__
+            try:
+                os.remove(dest)
+            except OSError:
+                pass
+    if last_error:
+        print('%s indirilemedi (%s).' % (label, last_error))
+    return False
+
+
+def _wait_installer(path, args):
+    """Kurulum bitene kadar bekle. NSIS üst süreci erken çıktığı için Start-Process -Wait."""
+    path_lit = path.replace("'", "''")
+    if args:
+        arg_lit = ','.join("'" + item.replace("'", "''") + "'" for item in args)
+        command = (
+            "$p = Start-Process -FilePath '%s' -ArgumentList @(%s) -Wait -PassThru; "
+            "if ($null -eq $p.ExitCode) { exit 0 } else { exit $p.ExitCode }"
+        ) % (path_lit, arg_lit)
+    else:
+        command = (
+            "$p = Start-Process -FilePath '%s' -Wait -PassThru; "
+            "if ($null -eq $p.ExitCode) { exit 0 } else { exit $p.ExitCode }"
+        ) % path_lit
+    try:
+        completed = subprocess.run(
+            ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command],
+            timeout=1200, **_hidden(),
+        )
+    except subprocess.TimeoutExpired:
+        print('Kurulum penceresi zaman aşımına uğradı.')
+        return None
+    except Exception as exc:
+        print('Kurulum başlatılamadı (%s).' % exc.__class__.__name__)
+        return None
+    return completed.returncode
+
+
+def _npcap_exit_message(code):
+    messages = {
+        1: 'Npcap kurulumu iptal edildi.',
+        2: 'Npcap kurulumu yarıda kesildi.',
+        350: 'Npcap kurulumu başarısız. Bilgisayarı yeniden başlatıp PacketLens uygulamasını tekrar açın.',
+        1618: 'Başka bir kurulum sürüyor. O bitince PacketLens uygulamasını tekrar açın.',
+        1633: 'Bu Windows sürümünde Npcap desteklenmiyor.',
+        3010: 'Npcap kuruldu. Canlı yakalama için bilgisayarı yeniden başlatmanız gerekebilir.',
+    }
+    return messages.get(code)
 
 
 def install_npcap():
     if npcap_installed():
         return True
-    if _winget_ok() and _run_winget('Insecure.Npcap', 'Npcap'):
-        time.sleep(2)
-        if npcap_installed():
-            return True
-    td = tempfile.gettempdir()
-    dest = os.path.join(td, 'npcap-setup.exe')
+    dest = os.path.join(tempfile.gettempdir(), 'npcap-setup.exe')
     try:
-        if not _download_npcap_installer(dest):
+        if not _download(npcap_installer_urls(), dest, 'Npcap', 500000):
             return False
-        ok = _install_npcap_exe(dest)
+        print('Npcap penceresi açılıyor. Ücretsiz sürüm sessiz kurulamaz; İleri ve Kur düğmelerine basın.', flush=True)
+        code = _wait_installer(dest, _NPCAP_GUI_ARGS)
         time.sleep(2)
-        return ok and npcap_installed()
+        if npcap_installed() or code == 3010:
+            note = _npcap_exit_message(code) if code == 3010 else None
+            if note:
+                print(note)
+            return True
+        note = _npcap_exit_message(code)
+        if note:
+            print(note)
+        elif code not in (0, None):
+            print('Npcap kurulumu tamamlanmadı (çıkış kodu %s).' % code)
+        else:
+            print('Npcap kurulumu doğrulanamadı.')
+        return False
     finally:
         try:
             os.remove(dest)
@@ -119,43 +347,52 @@ def install_npcap():
 
 
 def install_wireshark():
-    from pl_capture_win import find_dumpcap
     if find_dumpcap():
         return True
-    if _winget_ok() and _run_winget('WiresharkFoundation.Wireshark', 'Wireshark (dumpcap)'):
-        time.sleep(3)
+    dest = os.path.join(tempfile.gettempdir(), 'wireshark-setup.exe')
+    try:
+        if _download(wireshark_installer_urls(), dest, 'Wireshark', 20000000):
+            print('Wireshark sessiz kuruluyor (dumpcap)…', flush=True)
+            _wait_installer(dest, _WS_SILENT_ARGS)
+            time.sleep(2)
+            if find_dumpcap():
+                return True
+            print('Wireshark kurulumu dumpcap dosyasını yerleştirmedi.')
+    finally:
+        try:
+            os.remove(dest)
+        except OSError:
+            pass
+    if _run_winget('WiresharkFoundation.Wireshark', 'Wireshark'):
+        time.sleep(2)
         if find_dumpcap():
             return True
-    print('Wireshark bulunamadı. winget yoksa: https://www.wireshark.org/download.html')
-    return bool(find_dumpcap())
+    return False
 
 
 def ensure_capture_ready(elevated_child=False):
     """Npcap + dumpcap hazır değilse kurmayı dener. Başarı: True."""
     if sys.platform != 'win32':
         return False
-    from pl_capture_win import find_dumpcap
     if find_dumpcap() and npcap_installed():
         return True
-    if find_dumpcap() and not npcap_installed():
-        # dumpcap var, sürücü eksik olabilir
-        pass
     if not is_privileged():
         if elevated_child:
             print('Yönetici izni gerekli. start.bat dosyasına sağ tık → Yönetici olarak çalıştır.')
             return False
-        print('Npcap kurulumu için yönetici onayı isteniyor…')
-        relaunch_as_admin()
+        print('Kurulum için yönetici onayı isteniyor…')
+        if not relaunch_as_admin():
+            print('Yönetici onayı verilmedi. Canlı yakalama için start.bat dosyasına sağ tık → Yönetici olarak çalıştır.')
         return False
 
-    print('PacketLens: canlı yakalama için Npcap (ve gerekirse Wireshark) kuruluyor…')
+    print('PacketLens: canlı yakalama için Wireshark (dumpcap) ve Npcap hazırlanıyor…')
+    ok_cap = bool(find_dumpcap()) or install_wireshark()
     ok_npcap = npcap_installed() or install_npcap()
-    ok_cap = find_dumpcap() or install_wireshark()
     if ok_npcap and ok_cap:
-        print('Npcap + dumpcap hazır.')
+        print('Npcap ve dumpcap hazır.')
         return True
-    if ok_cap:
-        print('dumpcap var; Npcap doğrulanamadı — yine de deneyebilirsiniz.')
-        return True
-    print('Otomatik kurulum tamamlanamadı. Manuel: winget install Insecure.Npcap && winget install WiresharkFoundation.Wireshark')
+    if not ok_cap:
+        print('Wireshark kurulamadı: https://www.wireshark.org/download.html')
+    if not ok_npcap:
+        print('Npcap kurulamadı: https://npcap.com/#download')
     return False
